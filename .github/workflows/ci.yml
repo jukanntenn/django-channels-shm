@@ -92,8 +92,12 @@ jobs:
       - run: uv run ruff check .
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 4: type check (basedpyright, progressive baseline)
-  # The baseline is regenerated each run; only NEW errors fail the job.
+  # Job 4: type check (basedpyright, committed progressive baseline)
+  # The committed .basedpyright-baseline.json absorbs the known errors. The
+  # first step refreshes it (--writebaseline exits 0 when the file already
+  # exists); the second step fails only on NEW errors vs the baseline.
+  # Refresh the committed baseline locally after intentional error changes:
+  #   uv run basedpyright --writebaseline --baselinefile .basedpyright-baseline.json
   # ─────────────────────────────────────────────────────────────────────
   typecheck:
     name: "basedpyright (matrix)"
@@ -113,10 +117,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: uv sync --group type-checking
       - run: uvx maturin develop --skip-install
-      - name: "Generate baseline (absorbs all current errors)"
-        run: uv run basedpyright --writebaseline --baselinefile /tmp/baseline.json
+      - name: "Refresh baseline (absorbs current errors)"
+        run: uv run basedpyright --writebaseline --baselinefile .basedpyright-baseline.json
       - name: "Check against baseline (fails only on NEW errors)"
-        run: uv run basedpyright --baselinefile /tmp/baseline.json
+        run: uv run basedpyright --baselinefile .basedpyright-baseline.json
 
   # ─────────────────────────────────────────────────────────────────────
   # Job 5: tests (fast, no slow/e2e)

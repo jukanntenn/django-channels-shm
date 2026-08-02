@@ -31,7 +31,7 @@ The native module MUST be built before any test/type-check will pass.
 | Format | `uv run ruff format .` |
 | Lint (fix) | `uv run ruff check --fix .` |
 | Lint (check) | `uv run ruff check .` |
-| Type check (local, strictest) | `uv run basedpyright` |
+| Type check (committed progressive baseline) | `uv run basedpyright --baselinefile .basedpyright-baseline.json` |
 | Test (default, fast) | `uv run pytest -m "not slow and not e2e"` |
 | Test (cross-process) | `uv run pytest -m slow` |
 | Test (all) | `uv run pytest` |
@@ -48,6 +48,13 @@ The native module MUST be built before any test/type-check will pass.
 ### Benchmark (via nox)
 
 `nox -s bench_python | bench_rust | bench_cross | bench | check_regression | check_anchors`
+
+### Typecheck baseline
+
+`.basedpyright-baseline.json` is committed and absorbs known errors; the gate
+fails only on NEW errors. Refresh it after intentional error changes:
+
+    uv run basedpyright --writebaseline --baselinefile .basedpyright-baseline.json
 
 ### Quality gates
 
