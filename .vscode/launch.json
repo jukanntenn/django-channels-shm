@@ -1,0 +1,68 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: pytest current file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v", "-s", "-m", "not e2e"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Python: pytest selected test",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v", "-s", "-k", "${selectedText}"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Python: pytest + hypothesis seed",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v", "-s", "--hypothesis-seed=0"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Python: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Native: attach to Python process",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/.venv/bin/python",
+      "pid": "${command:pickProcess}",
+      "sourceLanguages": ["rust"]
+    },
+    {
+      "name": "Native: pytest current file",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/python",
+      "args": ["-m", "pytest", "${file}", "-v", "-s", "-m", "not e2e"],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"],
+      "env": { "RUST_BACKTRACE": "1" }
+    },
+    {
+      "name": "Native: current Python file",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/python",
+      "args": ["${file}"],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"],
+      "env": { "RUST_BACKTRACE": "1" }
+    }
+  ]
+}

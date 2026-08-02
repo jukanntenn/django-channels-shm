@@ -1,0 +1,217 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "channels-shm"
+version = "0.1.0"
+description = "A shared memory channel layer for Django Channels"
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+    "Framework :: Django",
+    "Framework :: AsyncIO",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "channels>=4.0",
+    "asgiref>=3.9",
+    "msgpack>=1.0",
+    "typing_extensions>=4.0",
+    "structlog>=25.0",
+]
+
+[dependency-groups]
+tests = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.5",
+    "hypothesis>=6.0",
+    "coverage[toml]>=7.0",
+]
+type-checking = ["basedpyright>=1.0", "ty>=0.0.62"]
+linting = ["ruff>=0.4"]
+benchmark = [
+    "pytest-benchmark>=4.0",
+    "nox>=2024.0",
+    "channels-redis>=4.3.0",
+]
+observability = [
+    { include-group = "tests" },
+]
+dev = [
+    { include-group = "tests" },
+    { include-group = "type-checking" },
+    { include-group = "linting" },
+    { include-group = "benchmark" },
+    { include-group = "observability" },
+]
+
+[tool.maturin]
+python-source = "src"
+manifest-path = "crates/_channels_shm_native/Cargo.toml"
+module-name = "channels_shm._native"
+features = ["pyo3/abi3-py311", "pyo3/extension-module"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+src = ["src", "tests"]
+extend-exclude = [".local", ".venv", "build", "dist", "*.md"]
+
+# Stable-strictest mode: select=ALL enables every non-removed rule, and preview=false
+# keeps only the stable rules (preview rules are silently skipped when preview is off,
+# per https://docs.astral.sh/ruff/preview/). This is the project's agreed policy.
+[tool.ruff.lint]
+select = ["ALL"]
+preview = false
+# Every ignore below is justified. Categories:
+#   - formatter conflict  : must be off when using `ruff format` (ruff docs requirement)
+#   - project policy      : deliberate non-enforcement (docstrings/annotations/copyright)
+#   - style preference    : conscious idiom choice, data-confirmed to fire on the codebase
+ignore = [
+    # ── formatter conflict (DO NOT remove while [tool.ruff.format] is active) ──
+    "COM812",  # trailing-comma-missing — `ruff format` owns this decision
+    "ISC001",  # single-line-implicit-string-concat — conflicts with the formatter
+
+    # ── project policy ──
+    "ANN",     # flake8-annotations — typing is enforced by basedpyright + ty, not ruff
+    "D",       # pydocstyle — no mandatory docstring policy; README carries public API docs
+    "CPY001",  # missing copyright notice — project ships no per-file copyright headers
+    "FIX",     # flake8-fixme — allow committed FIXME/TODO/XXX markers
+    "TD",      # flake8-todos — tolerate free-form TODOs
+    "ERA001",  # eradicate — allow commented-out code during active development
+
+    # ── style preference (data-confirmed: these fire on src/ today) ──
+    "PTH",     # flake8-use-pathlib — project idiom is `os`/`shutil`; ignoring the whole category
+    "PLC0415", # import-outside-top-level — fixtures/helpers intentionally import lazily
+    "PLR0913", # too-many-arguments — public layer API legitimately takes many config kwargs
+    "PLR0912", # too-many-branches — acceptable in dispatch/state-machine code
+    "PLR0917", # too-many-positional — paired with PLR0913 reasoning
+    "PLR2004", # magic-value-comparison — sentinel integers (capacities, flags) are clearer inline
+    "SIM105",  # suppressible-exception — prefer explicit try/except over contextlib.suppress
+    "BLE001",  # blind-except — broad except is intentional at the layer boundary
+    "TRY003",  # raise-vanilla-args — long exception messages are fine here
+    "EM101",   # raw-string-in-exception — style only
+    "EM102",   # f-string-in-exception — style only
+    "FBT001",  # boolean-type-hint-positional — booleans-as-flags are part of the API
+    "FBT002",  # boolean-default-value-positional — same
+    "FBT003",  # boolean-positional-value-in-call — same
+    "PERF203", # try-except-in-loop — negligible on CPython 3.11+ and clearer to read
+    "PYI021",  # docstring-in-stub — kept for editor hover; project rule disables docstrings globally
+    "PYI034",  # typing.new-type — not adopted; __new__ typing stays as-is
+    "E501",    # line-too-long — formatter caps code lines; long comments/URLs/spec refs are acceptable
+    "S108",    # hardcoded-tmp-directory — /dev/shm is the intended backing store for this layer
+    "S110",    # try-except-pass — cleanup/teardown paths intentionally swallow exceptions
+    "C901",    # complex-structure — core send/group_send/flush are legitimately complex
+    "N818",    # error-suffix-on-exception-name — public API names (ChannelFull etc.) are stable
+    "A002",    # builtin-arg-shadowing — .pyi stubs mirror the Rust binding signatures (e.g. `len`)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test code legitimately uses patterns production code must avoid.
+"tests/**" = [
+    "S101",      # assert — asserts are the point of tests
+    "S",         # flake8-bandit — security checks irrelevant to test fixtures
+    "SLF001",    # private-member-access — white-box tests probe internals
+    "ANN",       # annotations — test helpers stay annotation-light
+    "D",         # docstrings — not required on test functions
+    "PT011",     # pytest-raises-too-broad — broad raises are intentional
+    "RUF012",    # mutable-class-default — MutableClassVar churn not worth it in tests
+    "ASYNC230",  # blocking-open-call-in-async-function — fine in async fixtures
+    "ASYNC240",  # blocking-builtin-in-async-function — fine in async fixtures
+    "ASYNC222",  # blocking-os-call-in-async-function — fine in async fixtures
+    "ASYNC251",  # blocking-time-sleep-in-async-function — deliberate in tests
+    "PLC0415",   # import-outside-top-level — fixtures import lazily
+    "PLR2004",   # magic-value-comparison — tests are full of literal sentinels
+    "BLE001",    # blind-except — test teardown swallows broadly on purpose
+    "RUF006",    # asyncio-store-unused-variable — fire-and-forget tasks common in concurrency tests
+]
+"bench/**" = [
+    "INP001",    # implicit-namespace-package — bench is not an importable package
+    "S101",      # assert — used in benchmark sanity checks
+    "ANN",       # annotations — not required in benchmarks
+    "D",         # docstrings — not required in benchmarks
+    "SLF001",    # private-member-access — benches probe internals
+    "PT011",     # pytest-raises-too-broad — irrelevant in benches
+    "T20",       # print — benchmark output uses print
+    "RUF012",
+    "PLR0915",   # too-many-statements — white-box crash-injection tests legitimately run long (slot setup, injection, multi-step recovery assertion)
+]
+
+# ruff formatter (Black-compatible default style). Required: COM812/ISC001 above
+# MUST stay ignored while this section is active.
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "bench"]
+python_files = ["test_*.py", "bench_*.py"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--import-mode=importlib",
+]
+xfail_strict = true
+asyncio_mode = "auto"
+filterwarnings = ["error", "ignore:::hypothesis", "ignore::ResourceWarning"]
+
+markers = [
+    "slow: 跨进程集成测试（multiprocessing，Linux only）",
+    "e2e: 端到端 Docker Django 栈测试（需 docker compose）",
+]
+
+[tool.coverage.run]
+source = ["channels_shm"]
+parallel = true
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    ": \\.\\.\\.$",
+    "^ +\\.\\.\\.$",
+]
+
+[tool.basedpyright]
+typeCheckingMode = "all"
+pythonVersion = "3.11"
+pythonPlatform = "Linux"
+stubPath = "stubs"
+reportMissingImports = true
+reportMissingTypeStubs = true
+reportUnnecessaryTypeIgnoreComment = true
+strictListInference = true
+strictDictionaryInference = true
+strictSetInference = true
+# Tests need white-box access to internal state for coverage testing
+reportPrivateUsage = "none"
+
+# ── ty: fast CI type-checking gate (§3.5 dual-check: ty + basedpyright) ──
+[tool.ty.environment]
+python-version = "3.11"
+python-platform = "linux"
+
+[tool.ty.analysis]
+# Disable `type: ignore` comments; use `ty: ignore` for ty-specific suppressions.
+respect-type-ignore-comments = false
+
+[tool.ty.rules]
+# Spec §3.5: "最严，所有规则 error"
+all = "error"

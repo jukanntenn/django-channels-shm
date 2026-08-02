@@ -1,0 +1,20 @@
+# Reproducible 3-way benchmark environment (2 CPUs / 2 GB RAM).
+# Usage:
+#   docker compose build
+#   docker compose run --rm bench
+#
+# The benchmark container runs:
+#   - InMemoryChannelLayer  (single-process roundtrip ceiling)
+#   - channels_shm          (cross-process S2 send/recv + S4 group fanout)
+#   - channels_redis        (same S2/S4 scenarios via a local redis-server)
+# and prints a JSON summary that is copied into README.md / README.zh-CN.md.
+services:
+  bench:
+    build:
+      context: ../..
+      dockerfile: bench/docker/Dockerfile
+    # The documented hardware constraint for all published numbers.
+    cpus: 2
+    mem_limit: 2g
+    # The shm layer maps 256 MB shared regions + wakeup sockets in /dev/shm.
+    shm_size: 1g

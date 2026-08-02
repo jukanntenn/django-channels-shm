@@ -1,0 +1,40 @@
+[package]
+name = "_channels_shm_native"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+build = "build.rs"
+
+[lib]
+name = "_channels_shm_native"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["abi3-py311"] }
+libc = "0.2"
+
+[features]
+metrics = []            # O3: Rust hot-path metrics gating (Counter/Histogram)
+tracing_events = []     # O3: Rust cold-path event logging gating (recover/compact/pid_dead)
+
+[build-dependencies]
+pyo3-build-config = "0.29"
+
+[[bench]]
+name = "bench_atomic"
+harness = false
+
+[[bench]]
+name = "bench_ring"
+harness = false
+
+[[bench]]
+name = "bench_slab"
+harness = false
+
+[[bench]]
+name = "bench_index"
+harness = false
+
+[dev-dependencies]
+criterion = "0.5"

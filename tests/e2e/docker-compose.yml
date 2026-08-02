@@ -1,0 +1,41 @@
+# e2e cross-worker Django/channels stack.
+# Usage:
+#   docker compose build
+#   docker compose up -d worker1 worker2 worker3
+#   docker compose run --rm runner pytest tests/e2e/ -v
+#
+# Three explicit worker services (not `deploy.replicas`) so Docker DNS gives
+# each worker a distinct hostname; the runner's WORKER_HOSTS lists them and the
+# cross-worker tests connect to different workers on purpose.
+services:
+  worker1: &worker
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile
+    # All workers share host /dev/shm via IPC=host so the shm-backed layer
+    # is visible across worker containers.
+    ipc: host
+    command: ["daphne", "-b", "0.0.0.0", "-p", "8000", "tests.e2e.testapp.asgi:application"]
+    expose: ["8000"]
+    restart: unless-stopped
+
+  worker2:
+    <<: *worker
+
+  worker3:
+    <<: *worker
+
+  runner:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile
+    ipc: host
+    command: ["pytest", "tests/e2e/", "-v"]
+    depends_on:
+      - worker1
+      - worker2
+      - worker3
+    # The runner resolves workers by service name via Docker DNS.
+    environment:
+      WORKER_HOSTS: "worker1:8000,worker2:8000,worker3:8000"
+    profiles: ["test"]

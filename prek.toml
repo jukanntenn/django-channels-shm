@@ -1,0 +1,61 @@
+# prek pre-commit config.
+# Install:  uv tool install prek && prek install
+# Run:      prek run [--all-files]
+#
+# Policy: every format/lint hook runs on every commit (no priority layering).
+# Tests are intentionally NOT here — they run in CI and manually.
+
+default_install_hook_types = ["pre-commit"]
+
+[update]
+cooldown_days = 7
+freeze = true
+
+# ── Generic file checks (prek builtin, Rust-native, zero-dep fast path) ──
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "mixed-line-ending", args = ["--fix=lf"] },
+  { id = "check-yaml" },
+  { id = "check-toml" },
+  { id = "check-merge-conflict" },
+  { id = "check-added-large-files" },
+]
+
+# ── Spelling (crate-ci/typos; same tool ruff/prek use) ──
+[[repos]]
+repo = "https://github.com/crate-ci/typos"
+rev = "dbe52f72499cd4ab666928e4d14ecfa9ddbb6852"  # frozen: v1.48.0
+hooks = [{ id = "typos" }]
+
+# ── Lockfile consistency (astral-sh/uv-pre-commit) ──
+[[repos]]
+repo = "https://github.com/astral-sh/uv-pre-commit"
+rev = "e3e6ef7d9bda544b2e795782dbd7d2a4fbd7eb6d"  # frozen: 0.11.32
+hooks = [{ id = "uv-lock" }]
+
+# ── Python format/lint via project toolchain (language: system, zero version drift) ──
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "ruff-format", name = "ruff format", entry = "uv run ruff format --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true },
+  { id = "ruff-check", name = "ruff check", entry = "uv run ruff check --fix --exit-non-zero-on-fix --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true },
+]
+
+# ── Rust format/lint ──
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "cargo-fmt", name = "cargo fmt", entry = "cargo fmt --manifest-path crates/_channels_shm_native/Cargo.toml --", language = "system", types = ["rust"], pass_filenames = false },
+  # cargo-clippy is slow → manual stage only (run with: prek run --hook-stage manual cargo-clippy)
+  { id = "cargo-clippy", name = "cargo clippy", entry = "cargo clippy --manifest-path crates/_channels_shm_native/Cargo.toml --all-targets --all-features -- -D warnings", language = "system", types = ["rust"], pass_filenames = false, stages = ["manual"] },
+]
+
+# ── CLAUDE.md / AGENTS.md sync check ──
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "agents-md-sync", name = "CLAUDE.md == AGENTS.md sync", entry = "diff -q CLAUDE.md AGENTS.md", language = "system", files = "^(CLAUDE|AGENTS)\\.md$", pass_filenames = false },
+]

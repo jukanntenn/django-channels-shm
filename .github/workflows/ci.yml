@@ -1,0 +1,280 @@
+name: CI
+
+permissions:
+  contents: read
+  pull-requests: read   # dorny/paths-filter needs this for PR file lists
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 1: change detection. Every other job reads its outputs.
+  # ─────────────────────────────────────────────────────────────────────
+  changes:
+    name: "Detect changes"
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.f.outputs.python }}
+      rust: ${{ steps.f.outputs.rust }}
+      precommit: ${{ steps.f.outputs.precommit }}
+      ci: ${{ steps.f.outputs.ci }}
+      docs_only: ${{ steps.f.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: f
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            python:
+              - 'src/**'
+              - 'tests/**'
+              - 'stubs/**'
+              - 'bench/**/*.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+            rust:
+              - 'crates/**'
+              - 'build.rs'
+            precommit:
+              - 'prek.toml'
+              - '.typos.toml'
+            ci:
+              - '.github/workflows/**'
+            docs:
+              - '*.md'
+              - 'LICENSE'
+              - '.gitignore'
+      - id: docscheck
+        # docs_only = docs changed AND nothing else changed
+        if: ${{ steps.f.outputs.python == 'false' && steps.f.outputs.rust == 'false' && steps.f.outputs.precommit == 'false' && steps.f.outputs.ci == 'false' }}
+        run: echo "docs_only=true" >> "$GITHUB_OUTPUT"
+      - id: docsneg
+        run: echo "docs_only=${{ (steps.docscheck.outputs.docs_only == 'true') && 'true' || 'false' }}" >> "$GITHUB_OUTPUT"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 2: format check (python)
+  # ─────────────────────────────────────────────────────────────────────
+  format:
+    name: "ruff format"
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.ci == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --only-group linting
+      - run: uv run ruff format --check .
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 3: lint check (python)
+  # ─────────────────────────────────────────────────────────────────────
+  lint:
+    name: "ruff check"
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.ci == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --only-group linting
+      - run: uv run ruff check .
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 4: type check (basedpyright, progressive baseline)
+  # The baseline is regenerated each run; only NEW errors fail the job.
+  # ─────────────────────────────────────────────────────────────────────
+  typecheck:
+    name: "basedpyright (matrix)"
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.ci == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: uv sync --group type-checking
+      - run: uvx maturin develop --skip-install
+      - name: "Generate baseline (absorbs all current errors)"
+        run: uv run basedpyright --writebaseline --baselinefile /tmp/baseline.json
+      - name: "Check against baseline (fails only on NEW errors)"
+        run: uv run basedpyright --baselinefile /tmp/baseline.json
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 5: tests (fast, no slow/e2e)
+  # ─────────────────────────────────────────────────────────────────────
+  test:
+    name: "pytest (matrix)"
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.ci == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # abi3-py311 build (dropped 3.10 to unlock pyo3 PyBuffer zero-copy, H-01).
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: uv sync --group dev
+      - run: uvx maturin develop --skip-install
+      - run: uv run pytest -m "not slow and not e2e" --cov -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: .coverage
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 5b: release-mode smoke (python -O) — verifies the if __debug__:
+  # blocks (O3 observability gating) don't break under -O, where those code
+  # paths are eliminated. Runs only the fast core subset (F-07 / X-04).
+  # ─────────────────────────────────────────────────────────────────────
+  test-release-smoke:
+    name: "pytest -O smoke"
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.ci == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: uv sync --group dev
+      - run: uvx maturin develop --skip-install
+      # -O strips assert + eliminates if __debug__: blocks; the core send/
+      # receive/group/flush paths must still work without the observability
+      # hooks. Property/concurrency tests are enough to surface latent bugs.
+      # -W ignores the pytest "assertions not executed" config warning that -O
+      # itself triggers (pyproject's filterwarnings=error would otherwise fail
+      # the run before any test executes).
+      - run: uv run python -O -m pytest tests/test_core.py tests/test_properties.py tests/test_native/ -q -W "ignore::pytest.PytestConfigWarning"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 6: cross-process integration (slow, linux only, single version)
+  # ─────────────────────────────────────────────────────────────────────
+  test-cross-process:
+    name: "pytest slow (cross-process)"
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.ci == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: uv sync --group dev
+      - run: uvx maturin develop --skip-install
+      - run: uv run pytest -m slow -v
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 7: e2e Django/channels stack (docker compose)
+  # ─────────────────────────────────────────────────────────────────────
+  e2e:
+    name: "e2e (docker compose)"
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker --version
+      - run: docker compose --version
+      - name: "Build e2e image"
+        working-directory: tests/e2e
+        run: docker compose build
+      - name: "Start worker replicas"
+        working-directory: tests/e2e
+        run: docker compose up -d worker1 worker2 worker3
+      - name: "Wait for workers"
+        working-directory: tests/e2e
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000 >/dev/null 2>&1 || docker compose ps | grep -q "Up"; then break; fi
+            sleep 2
+          done
+          # workers don't serve HTTP root; just sleep to let daphne bind
+          sleep 8
+      - name: "Run e2e tests"
+        working-directory: tests/e2e
+        run: docker compose run --rm runner pytest tests/e2e/ -v
+      - name: "Tear down"
+        if: always()
+        working-directory: tests/e2e
+        run: docker compose down -v
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 8: Rust checks
+  # ─────────────────────────────────────────────────────────────────────
+  rust:
+    name: "cargo fmt + clippy + test"
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/_channels_shm_native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 9: native build verification (maturin)
+  # ─────────────────────────────────────────────────────────────────────
+  build:
+    name: "maturin build"
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 10: precommit full sweep (all hooks, all files)
+  # ─────────────────────────────────────────────────────────────────────
+  precommit:
+    name: "prek run --all-files"
+    needs: changes
+    if: ${{ needs.changes.outputs.precommit == 'true' || needs.changes.outputs.ci == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable   # prek includes cargo fmt/clippy
+      - run: uv tool install prek
+      - run: uv sync --group dev
+      - run: prek run --all-files

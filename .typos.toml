@@ -1,0 +1,11 @@
+# typos config: excludes generated/vendored paths and false-positive-heavy files.
+[files]
+extend-exclude = [
+  ".local/",
+  ".venv/",
+  "target/",
+  "build/",
+  "dist/",
+  "uv.lock",
+  ".basedpyright-baseline.json",
+]

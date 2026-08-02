@@ -1,0 +1,52 @@
+{
+  "date": "2026-08-02",
+  "environment": {
+    "container": "docker compose (bench/docker/docker-compose.yml)",
+    "cpus": 2,
+    "memory_gb": 2,
+    "python": "3.13.14",
+    "mode": "release (python -O)"
+  },
+  "methodology": "median of 7 sequential runs; sender blasts without backpressure (recv latency includes queueing); S4 group fanout is the noisiest scenario (2 CPUs shared by 5 processes)",
+  "n_runs": 7,
+  "scenarios": {
+    "roundtrip_single_process": {
+      "in_memory": {
+        "ops_per_sec": 109151,
+        "latency_p50_us": 8.3,
+        "latency_p99_us": 31.4
+      },
+      "channels_shm": {
+        "ops_per_sec": 62140,
+        "latency_p50_us": 14.4,
+        "latency_p99_us": 55.9
+      }
+    },
+    "s2_cross_process_send_recv": {
+      "channels_shm": {
+        "send_throughput_qps": 118206,
+        "send_latency_p50_us": 7.4,
+        "send_latency_p99_us": 35.5,
+        "recv_latency_p50_us": 2151.7
+      },
+      "channels_redis": {
+        "send_throughput_qps": 1894,
+        "send_latency_p50_us": 484.0,
+        "send_latency_p99_us": 879.8,
+        "recv_latency_p50_us": 24208.8
+      }
+    },
+    "s4_group_fanout": {
+      "channels_shm": {
+        "send_throughput_qps": 8808,
+        "recv_latency_p50_us": 131.6,
+        "recv_latency_p99_us": 20157.6
+      },
+      "channels_redis": {
+        "send_throughput_qps": 661,
+        "recv_latency_p50_us": 962.9,
+        "recv_latency_p99_us": 46940.1
+      }
+    }
+  }
+}
