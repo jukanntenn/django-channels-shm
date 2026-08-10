@@ -120,6 +120,24 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Agent hook scripts shell out to a hardcoded tool allowlist (uv/ruff/cargo/rustfmt)
+# and emit diagnostics/JSON via print — these patterns are intrinsic to hook design,
+# not real lint defects. Other rules still apply (catches unused imports, real bugs).
+".claude/hooks/**" = [
+    "T201",  # print — hooks emit diagnostics to stderr and JSON to stdout by contract
+    "S603",  # subprocess-untrusted-input — only input is the path the agent just edited
+    "S607",  # partial-executable-path — intentional PATH lookup for uv/ruff/cargo/rustfmt
+]
+".codex/hooks/**" = [
+    "T201",  # print — hooks emit diagnostics to stderr and JSON to stdout by contract
+    "S603",  # subprocess-untrusted-input — only input is the path the agent just edited
+    "S607",  # partial-executable-path — intentional PATH lookup for uv/ruff/cargo/rustfmt
+]
+".zcode/hooks/**" = [
+    "T201",  # print — hooks emit diagnostics to stderr and JSON to stdout by contract
+    "S603",  # subprocess-untrusted-input — only input is the path the agent just edited
+    "S607",  # partial-executable-path — intentional PATH lookup for uv/ruff/cargo/rustfmt
+]
 # Test code legitimately uses patterns production code must avoid.
 "tests/**" = [
     "S101",      # assert — asserts are the point of tests

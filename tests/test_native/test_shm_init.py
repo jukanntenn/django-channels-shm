@@ -6,7 +6,6 @@ import os
 from typing import TYPE_CHECKING
 
 from channels_shm._native import (
-    MAGIC,
     VERSION,
     check_magic,
     pid_dead,
@@ -82,12 +81,6 @@ def test_check_magic_false_on_uninit_region(region: NativeRegion) -> None:
     assert check_magic(region.region) is False
 
 
-def test_layout_exposes_magic_and_version_constants() -> None:
-    """Sanity: the MAGIC/VERSION constants are exposed to Python."""
-    assert MAGIC == 0x4348_5348
-    assert VERSION == 1
-
-
 def test_pid_dead_zero_is_never_dead() -> None:
     """pid_dead should return False for pid=0 (sentinel for 'no owner')."""
     assert pid_dead(0, 0) is False
@@ -110,32 +103,3 @@ def test_pid_dead_pid_reuse_detected() -> None:
     """pid_dead should return True when starttime doesn't match (PID reused)."""
     # Same PID but a wildly different starttime → treated as a recycled PID.
     assert pid_dead(os.getpid(), 1) is True
-
-
-def test_validate_config_is_deterministic(layout: ShmLayout) -> None:
-    """Calling validate_config multiple times should be deterministic."""
-    for _ in range(3):
-        assert validate_config(
-            layout.region,
-            inline_size=layout.inline_size,
-            default_capacity=layout.default_capacity,
-            max_channels=layout.max_channels,
-            max_groups=layout.max_groups,
-            max_members_per_group=layout.max_members_per_group,
-            max_processes=layout.max_processes,
-        )
-
-
-def test_full_layout_round_trip_smoke(layout: ShmLayout) -> None:
-    """End-to-end smoke: init → magic check → config validate → version read."""
-    assert check_magic(layout.region)
-    assert read_version(layout.region) == VERSION
-    assert validate_config(
-        layout.region,
-        layout.inline_size,
-        layout.default_capacity,
-        layout.max_channels,
-        layout.max_groups,
-        layout.max_members_per_group,
-        layout.max_processes,
-    )

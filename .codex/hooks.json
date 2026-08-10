@@ -2,11 +2,11 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "apply_patch",
         "hooks": [
           {
             "type": "command",
-            "command": "'/home/alice/Workspace/django-channels-shm/.codex/hooks/format-on-edit.sh'"
+            "command": "uv run \"$(git rev-parse --show-toplevel)/.codex/hooks/post_tool_use.py\""
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'/home/alice/Workspace/django-channels-shm/.codex/hooks/lint-on-stop.sh'"
+            "command": "uv run \"$(git rev-parse --show-toplevel)/.codex/hooks/stop.py\""
           }
         ]
       }

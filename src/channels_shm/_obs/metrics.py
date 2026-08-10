@@ -107,7 +107,9 @@ class MetricsRegistry:
         "_stop_event",
     )
 
-    def __init__(self, metrics_dir: str, pid: int, *, flush_interval: int = 30) -> None:
+    def __init__(
+        self, metrics_dir: str, pid: int, *, flush_interval: float = 30
+    ) -> None:
         self._counters: dict[str, Counter] = {}
         self._histograms: dict[str, Histogram] = {}
         self._pid = pid

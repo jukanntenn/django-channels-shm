@@ -4212,24 +4212,6 @@
                 }
             }
         ],
-        "./tests/test_coverage.py": [
-            {
-                "code": "reportPrivateLocalImportUsage",
-                "range": {
-                    "startColumn": 44,
-                    "endColumn": 60,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportPrivateLocalImportUsage",
-                "range": {
-                    "startColumn": 44,
-                    "endColumn": 60,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./tests/test_cross_process/_workers.py": [
             {
                 "code": "reportExplicitAny",

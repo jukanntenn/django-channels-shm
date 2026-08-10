@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from tests.test_cross_process._workers import consumer_worker, producer_worker
+from tests.cross_process._workers import consumer_worker, producer_worker
 
 pytestmark = pytest.mark.slow
 

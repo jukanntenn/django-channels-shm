@@ -40,5 +40,7 @@ src/channels_shm/_native.abi3.so
 crates/**/*.info
 *.profraw
 
+.zcode/plans/
+
 # ── Harness: e2e docker build artifacts ──
 tests/e2e/.docker/
