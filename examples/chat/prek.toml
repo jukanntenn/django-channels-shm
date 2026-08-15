@@ -1,0 +1,42 @@
+# Example app — isolated prek sub-project.
+#
+# `orphan = true` consumes this directory's files: the workspace root's
+# hooks (select=ALL ruff, its fixers) never touch the demo, and the demo's
+# light lint policy never leaks into the library. Generic checks (builtins,
+# typos, lock freshness) are mirrored here on purpose.
+
+orphan = true
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace", groups = ["format"], exclude = "^uv\\.lock$" },
+  { id = "end-of-file-fixer", groups = ["format"], exclude = "^uv\\.lock$" },
+  { id = "mixed-line-ending", args = ["--fix=lf"], groups = ["format"], exclude = "^uv\\.lock$" },
+  { id = "check-yaml", groups = ["lint"] },
+  { id = "check-toml", groups = ["lint"] },
+  { id = "check-json", groups = ["lint"] },
+  { id = "check-merge-conflict", groups = ["lint"] },
+  { id = "check-added-large-files", groups = ["lint"] },
+  { id = "detect-private-key", groups = ["lint"] },
+]
+
+# ── Spelling (same frozen rev as the workspace root) ──
+[[repos]]
+repo = "https://github.com/crate-ci/typos"
+rev = "dbe52f72499cd4ab666928e4d14ecfa9ddbb6852"  # frozen: v1.48.0
+hooks = [{ id = "typos", groups = ["lint"] }]
+
+# ── Example lockfile freshness ──
+[[repos]]
+repo = "https://github.com/astral-sh/uv-pre-commit"
+rev = "e3e6ef7d9bda544b2e795782dbd7d2a4fbd7eb6d"  # frozen: 0.11.32
+hooks = [{ id = "uv-lock", groups = ["check"] }]
+
+# ── Python format/lint via this project's own uv env ──
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "ruff-format", name = "ruff format", entry = "uv run ruff format --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true, groups = ["format"] },
+  { id = "ruff-check", name = "ruff check", entry = "uv run ruff check --fix --exit-non-zero-on-fix --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true, groups = ["lint"] },
+]

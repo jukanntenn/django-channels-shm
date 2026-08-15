@@ -1,0 +1,184 @@
+name: Release
+
+# Tag-push pipeline: push a tag `v<PEP 440>` (e.g. v0.1.0, v0.1.0rc1 — rc
+# tags publish as pre-releases) and this runs the full CI as a gate, builds
+# linux wheels + sdist, publishes to TestPyPI then PyPI via Trusted
+# Publishing (OIDC), and cuts the GitHub release from CHANGELOG.md.
+#
+# One-time setup (repo owner): configure PyPI Trusted Publishers for this
+# repository against the `testpypi` and `pypi` GitHub Environments.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false   # never cancel an in-flight publish
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Gate 0: tag must match pyproject [project].version (the single source
+  # of truth that maturin stamps into every artifact).
+  # ─────────────────────────────────────────────────────────────────────
+  guard:
+    name: "tag == pyproject version"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Assert tag matches [project].version"
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match pyproject version ${version} (expected tag v${version})"
+            exit 1
+          fi
+      - name: "Assert CHANGELOG has an entry for this version"
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          grep -q "## \[${version}\]" CHANGELOG.md || {
+            echo "::error::CHANGELOG.md has no '## [${version}]' section"; exit 1;
+          }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Gate 1: the full CI matrix, from the same reusable workflow used on
+  # every push/PR (no second test definition to drift).
+  # ─────────────────────────────────────────────────────────────────────
+  ci:
+    name: "CI (reusable)"
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Build: abi3-py311 wheels — one wheel per platform covers every CPython
+  # ≥ 3.11 (an interpreter is only required on Windows, which we don't
+  # target: the layer is Linux-only by design, MAP_SHARED + AF_UNIX).
+  # ─────────────────────────────────────────────────────────────────────
+  build-linux:
+    name: "wheel ${{ matrix.target }}"
+    needs: ci
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          command: build
+          args: --release --out dist
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/
+
+  sdist:
+    name: "sdist"
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist/
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Publish: TestPyPI first (skip-existing keeps re-runs cheap), then the
+  # real PyPI. Both via OIDC Trusted Publishing against GitHub
+  # Environments `testpypi` / `pypi`.
+  # ─────────────────────────────────────────────────────────────────────
+  publish-testpypi:
+    name: "TestPyPI"
+    needs: [build-linux, sdist]
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi:
+    name: "PyPI"
+    needs: [build-linux, sdist, publish-testpypi]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ─────────────────────────────────────────────────────────────────────
+  # GitHub Release: body from CHANGELOG.md (Keep a Changelog), wheels
+  # attached. rc tags → prerelease, excluded from "latest".
+  # ─────────────────────────────────────────────────────────────────────
+  github-release:
+    name: "GitHub Release"
+    needs: [build-linux, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # checkout is required so changelog-reader can read ./CHANGELOG.md
+      - uses: actions/checkout@v4
+
+      # v0.1.0rc1 -> 0.1.0rc1 (strip the leading "v" to match CHANGELOG headings)
+      - name: "Strip leading v from tag"
+        id: tag
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: "Read changelog entry for this version"
+        id: changelog
+        uses: mindsers/changelog-reader-action@v2
+        continue-on-error: true
+        with:
+          version: ${{ steps.tag.outputs.version }}
+          version_scheme: pep440
+          path: ./CHANGELOG.md
+
+      - name: "Download dist artifacts"
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist/
+
+      - name: "Create GitHub release"
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          body_path: ${{ steps.changelog.outputs.changes_file }}
+          generate_release_notes: ${{ steps.changelog.outcome != 'success' }}
+          # Mark rc tags as prerelease / not-latest. OR the changelog's own
+          # `status` signal with the tag-name heuristic so it still works when
+          # we fell back to auto notes (no CHANGELOG entry).
+          prerelease: ${{ steps.changelog.outputs.status == 'prereleased' || contains(github.ref_name, 'rc') }}
+          make_latest: ${{ !contains(github.ref_name, 'rc') }}

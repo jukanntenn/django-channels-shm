@@ -138,6 +138,24 @@ docker compose build
 docker compose run --rm bench        # prints the full JSON summary
 ```
 
+## Example app
+
+[`examples/chat`](examples/chat/) is a multi-process Django + Channels chat with
+**zero infrastructure** — no Redis, no database. It doubles as the pre-release
+acceptance project: `uv sync` there builds channels-shm from the working tree
+through maturin, and `manage.py demo_broadcast` asserts cross-process fan-out
+headlessly.
+
+```bash
+cd examples/chat
+uv sync
+uv run python manage.py run_workers      # N daphne workers on consecutive ports
+uv run python manage.py demo_broadcast   # headless acceptance: must print PASSED
+```
+
+Open two worker ports in two browser tabs; each chat line is tagged with the
+PID of the worker that handled it — messages hop processes via `/dev/shm`.
+
 ## Testing
 
 ```bash

@@ -134,6 +134,23 @@ docker compose build
 docker compose run --rm bench        # 输出完整 JSON 汇总
 ```
 
+## 示例应用
+
+[`examples/chat`](examples/chat/) 是一个多进程 Django + Channels 聊天室，
+**零基础设施** —— 无需 Redis、无需数据库。它同时是发布前验收项目：在该目录
+`uv sync` 会通过 maturin 从工作树真实构建 channels-shm，`manage.py
+demo_broadcast` 以无头方式断言跨进程消息分发。
+
+```bash
+cd examples/chat
+uv sync
+uv run python manage.py run_workers      # 在连续端口启动 N 个 daphne worker
+uv run python manage.py demo_broadcast   # 无头验收：必须输出 PASSED
+```
+
+在浏览器打开两个 worker 端口：每条聊天记录都标注了处理它的 worker PID ——
+消息经 `/dev/shm` 跨进程流转。
+
 ## 测试
 
 ```bash

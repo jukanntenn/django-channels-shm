@@ -1,0 +1,28 @@
+[project]
+name = "chat-example"
+version = "0.1.0"
+description = "channels-shm demo: multi-process chat with zero infrastructure (no Redis, no DB)"
+requires-python = ">=3.11"
+dependencies = [
+    "django>=4.2",
+    "channels[daphne]>=4.0",
+    "channels-shm",
+]
+
+[dependency-groups]
+linting = ["ruff>=0.4"]
+
+# The demo always runs against the working tree of the library: `uv sync`
+# builds channels-shm through maturin (a real wheel build, same as a release
+# install). To acceptance-test a published rc instead, see README.md.
+[tool.uv.sources]
+channels-shm = { path = "../.." }
+
+# Demo-app lint policy: deliberately light. A showcase app is Django-idiomatic
+# (settings assignments, magic attributes, print output in management
+# commands) and must not carry the library's select=ALL policy.
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "DJ"]

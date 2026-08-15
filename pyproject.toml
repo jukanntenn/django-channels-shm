@@ -64,11 +64,17 @@ manifest-path = "crates/_channels_shm_native/Cargo.toml"
 module-name = "channels_shm._native"
 features = ["pyo3/abi3-py311", "pyo3/extension-module"]
 
+[tool.uv]
+# examples/chat is a standalone uv project with its own lock (it depends on
+# this repo via a path source); excluded so `uv lock` at the root never
+# absorbs the demo's dependency tree.
+workspace.exclude = ["examples/chat"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py310"
-src = ["src", "tests"]
-extend-exclude = [".local", ".venv", "build", "dist", "*.md"]
+src = ["src", "tests", "scripts"]
+extend-exclude = [".local", ".venv", "build", "dist", "*.md", "examples"]
 
 # Stable-strictest mode: select=ALL enables every non-removed rule, and preview=false
 # keeps only the stable rules (preview rules are silently skipped when preview is off,
@@ -120,23 +126,27 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Agent hook scripts shell out to a hardcoded tool allowlist (uv/ruff/cargo/rustfmt)
-# and emit diagnostics/JSON via print — these patterns are intrinsic to hook design,
-# not real lint defects. Other rules still apply (catches unused imports, real bugs).
+# Agent hook scripts are thin prek wrappers: they shell out to `prek` on
+# PATH and print diagnostics/JSON to stdout+stderr by contract — these
+# patterns are intrinsic to hook design, not real lint defects.
 ".claude/hooks/**" = [
     "T201",  # print — hooks emit diagnostics to stderr and JSON to stdout by contract
     "S603",  # subprocess-untrusted-input — only input is the path the agent just edited
-    "S607",  # partial-executable-path — intentional PATH lookup for uv/ruff/cargo/rustfmt
+    "S607",  # partial-executable-path — intentional PATH lookup for prek
 ]
 ".codex/hooks/**" = [
     "T201",  # print — hooks emit diagnostics to stderr and JSON to stdout by contract
-    "S603",  # subprocess-untrusted-input — only input is the path the agent just edited
-    "S607",  # partial-executable-path — intentional PATH lookup for uv/ruff/cargo/rustfmt
+    "S603",  # subprocess-untrusted-input — only input is the paths the agent just edited
+    "S607",  # partial-executable-path — intentional PATH lookup for prek
 ]
 ".zcode/hooks/**" = [
     "T201",  # print — hooks emit diagnostics to stderr and JSON to stdout by contract
     "S603",  # subprocess-untrusted-input — only input is the path the agent just edited
-    "S607",  # partial-executable-path — intentional PATH lookup for uv/ruff/cargo/rustfmt
+    "S607",  # partial-executable-path — intentional PATH lookup for prek
+]
+# prek hook scripts (scripts/check_*.py) report findings on stdout by design.
+"scripts/**" = [
+    "T201",  # print — CLI diagnostics are the script's output contract
 ]
 # Test code legitimately uses patterns production code must avoid.
 "tests/**" = [

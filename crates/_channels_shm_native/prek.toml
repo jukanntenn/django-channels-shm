@@ -1,0 +1,28 @@
+# Rust sub-project — workspace mode runs these hooks with cwd = this crate
+# root, so plain `cargo` commands need no --manifest-path and receive
+# project-relative paths.
+#
+# Not declared orphan: the workspace root's generic hooks (whitespace fixers,
+# check-yaml/..., typos) still cover this directory; these hooks add the
+# Rust-specific ones.
+#
+# clippy is deliberately NOT auto-fixed (`--fix` exists but machine-applicable
+# Rust fixes can still alter semantics); `cargo fmt` in the format group is
+# the auto-fix path for Rust.
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "cargo-fmt", name = "cargo fmt", entry = "cargo fmt --", language = "system", types = ["rust"], pass_filenames = false, groups = ["format"] },
+  { id = "cargo-clippy", name = "cargo clippy", entry = "cargo clippy --all-targets --all-features -- -D warnings", language = "system", types = ["rust"], pass_filenames = false, groups = ["lint"] },
+  # --locked makes cargo fail when Cargo.lock is out of date with Cargo.toml
+  # (sub-second check; no compile). Mirrors uv-lock at the workspace root.
+  { id = "cargo-lock", name = "Cargo.lock up to date", entry = "cargo metadata --locked --format-version 1 > /dev/null", shell = "bash", language = "system", files = "^Cargo\\.(toml|lock)$", pass_filenames = false, groups = ["check"] },
+]
+
+# ── pre-push: Rust tests, mirroring CI rust job ──
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "cargo-test", name = "cargo test (pre-push, mirrors CI rust job)", entry = "cargo test", language = "system", types = ["rust"], pass_filenames = false, stages = ["pre-push"] },
+]

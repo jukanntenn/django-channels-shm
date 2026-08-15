@@ -1,26 +1,18 @@
 #!/usr/bin/env python3
+"""Thin adapter: PostToolUse → prek format+lint on the edited file.
+
+Same contract as .claude/hooks/post_tool_use.py (see that file); only the
+payload key casing differs (ZCode sends camelCase keys). Never blocks.
+"""
 
 from __future__ import annotations
 
 import json
 import subprocess
 import sys
-from pathlib import PurePath
+from pathlib import Path
 
-
-def commands_for(path: PurePath) -> list[list[str]]:
-    match path.suffix:
-        case ".py" | ".pyi":
-            return [
-                ["uv", "run", "ruff", "check", "--fix", str(path)],
-                ["uv", "run", "ruff", "format", str(path)],
-            ]
-        case ".rs":
-            # edition 2021 matches crates/_channels_shm_native/Cargo.toml; rustfmt is
-            # single-file (PostToolUse gets one path), cargo fmt only works crate-wide.
-            return [["rustfmt", "--edition", "2021", str(path)]]
-        case _:
-            return []
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> None:
@@ -29,28 +21,36 @@ def main() -> None:
     except json.JSONDecodeError:
         return
 
-    raw_path = (payload.get("toolInput") or {}).get("file_path")
-    if not isinstance(raw_path, str):
+    file_path = (payload.get("toolInput") or {}).get("file_path")
+    if not isinstance(file_path, str):
         return
 
-    for cmd in commands_for(PurePath(raw_path)):
-        try:
-            result = subprocess.run(cmd, capture_output=True, check=False, text=True)
-        except FileNotFoundError:
-            print(
-                f"[zcode-post-tool-use] {cmd[0]} not found on PATH; skipped {raw_path}",
-                file=sys.stderr,
-            )
-            continue
-        if result.returncode != 0:
-            print(
-                f"[zcode-post-tool-use] {cmd[0]} reported issues for {raw_path}:",
-                file=sys.stderr,
-            )
-            if result.stdout:
-                print(result.stdout, file=sys.stderr)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
+    try:
+        result = subprocess.run(
+            [
+                "prek",
+                "run",
+                "--group",
+                "format",
+                "--group",
+                "lint",
+                "--files",
+                file_path,
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except FileNotFoundError:
+        print("[post-tool-use] prek not found on PATH; skipped", file=sys.stderr)
+        return
+
+    if result.returncode != 0:
+        print(f"[post-tool-use] prek format+lint on {file_path}:", file=sys.stderr)
+        for stream in (result.stdout, result.stderr):
+            if stream.strip():
+                print(stream, file=sys.stderr)
 
 
 if __name__ == "__main__":

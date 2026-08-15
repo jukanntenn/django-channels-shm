@@ -1,61 +1,95 @@
-# prek pre-commit config.
-# Install:  uv tool install prek && prek install
-# Run:      prek run [--all-files]
+# prek workspace root — the single source of truth for every quality gate.
 #
-# Policy: every format/lint hook runs on every commit (no priority layering).
-# Tests are intentionally NOT here — they run in CI and manually.
+# Sub-project configs (auto-discovered; each runs with cwd = its own root):
+#   crates/_channels_shm_native/prek.toml   Rust: cargo fmt / clippy / lock check
+#   examples/chat/prek.toml                 demo app (orphan, own light policy)
+#
+# Hook groups (`prek run --group <name>`):
+#   format — mutating fixers (auto-fix always on)
+#   lint   — read-only quality gates (incl. ruff check --fix and clippy)
+#   check  — consistency/freshness gates: lock files, version
+#
+# Who runs what:
+#   AI post-edit : prek run --group format --group lint --files <edited>
+#   AI Stop      : prek run --group lint --all-files
+#   git commit   : every pre-commit-stage hook below, for staged files
+#   git pre-push : tests (fast pytest / cargo test), mirroring CI
+#   CI           : prek validate-config + prek run --all-files
+#
+# No formatter/linter is defined anywhere outside this file — not in CI
+# workflows, not in AI tool hooks. Install: uv tool install prek && prek install
 
-default_install_hook_types = ["pre-commit"]
+minimum_prek_version = "0.4.11"
+default_install_hook_types = ["pre-commit", "pre-push", "commit-msg"]
 
 [update]
 cooldown_days = 7
 freeze = true
 
-# ── Generic file checks (prek builtin, Rust-native, zero-dep fast path) ──
+# Generated files are exempt from every mutating hook below (the generator
+# owns those bytes; a fixer diverging from raw output would fight it). Their
+# freshness is enforced by the check group (uv-lock / cargo-lock) or by CI
+# (.basedpyright-baseline.json: refreshed by the typecheck job).
+# The regex is inlined per hook — prek has no config-level interpolation.
+#   uv.lock, .basedpyright-baseline.json, crates/**/Cargo.lock
+#   (examples/chat/uv.lock is covered by the orphan example config)
+
 [[repos]]
 repo = "builtin"
 hooks = [
-  { id = "trailing-whitespace" },
-  { id = "end-of-file-fixer" },
-  { id = "mixed-line-ending", args = ["--fix=lf"] },
-  { id = "check-yaml" },
-  { id = "check-toml" },
-  { id = "check-merge-conflict" },
-  { id = "check-added-large-files" },
+  # ── format group: mutating fixers ──
+  { id = "trailing-whitespace", groups = ["format"], exclude = "^(uv\\.lock|\\.basedpyright-baseline\\.json)$|^crates/_channels_shm_native/Cargo\\.lock$" },
+  { id = "end-of-file-fixer", groups = ["format"], exclude = "^(uv\\.lock|\\.basedpyright-baseline\\.json)$|^crates/_channels_shm_native/Cargo\\.lock$" },
+  { id = "mixed-line-ending", args = ["--fix=lf"], groups = ["format"], exclude = "^(uv\\.lock|\\.basedpyright-baseline\\.json)$|^crates/_channels_shm_native/Cargo\\.lock$" },
+  # ── lint group: read-only file checks ──
+  { id = "check-yaml", groups = ["lint"] },
+  { id = "check-toml", groups = ["lint"] },
+  { id = "check-json", groups = ["lint"] },
+  { id = "check-merge-conflict", groups = ["lint"] },
+  { id = "check-added-large-files", groups = ["lint"] },
+  { id = "detect-private-key", groups = ["lint"] },
 ]
 
 # ── Spelling (crate-ci/typos; same tool ruff/prek use) ──
 [[repos]]
 repo = "https://github.com/crate-ci/typos"
 rev = "dbe52f72499cd4ab666928e4d14ecfa9ddbb6852"  # frozen: v1.48.0
-hooks = [{ id = "typos" }]
+hooks = [{ id = "typos", groups = ["lint"] }]
+
+# ── GitHub Actions syntax (keeps "local green, CI red" from happening) ──
+[[repos]]
+repo = "https://github.com/rhysd/actionlint"
+rev = "v1.7.12"
+hooks = [{ id = "actionlint", groups = ["lint"] }]
 
 # ── Lockfile consistency (astral-sh/uv-pre-commit) ──
 [[repos]]
 repo = "https://github.com/astral-sh/uv-pre-commit"
 rev = "e3e6ef7d9bda544b2e795782dbd7d2a4fbd7eb6d"  # frozen: 0.11.32
-hooks = [{ id = "uv-lock" }]
+hooks = [{ id = "uv-lock", groups = ["check"] }]
 
 # ── Python format/lint via project toolchain (language: system, zero version drift) ──
 [[repos]]
 repo = "local"
 hooks = [
-  { id = "ruff-format", name = "ruff format", entry = "uv run ruff format --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true },
-  { id = "ruff-check", name = "ruff check", entry = "uv run ruff check --fix --exit-non-zero-on-fix --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true },
+  { id = "ruff-format", name = "ruff format", entry = "uv run ruff format --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true, groups = ["format"] },
+  { id = "ruff-check", name = "ruff check", entry = "uv run ruff check --fix --exit-non-zero-on-fix --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true, groups = ["lint"] },
+  { id = "agents-md-sync", name = "AGENTS.md == CLAUDE.md sync", entry = "uv run python scripts/check_agents.py", language = "system", files = "^(AGENTS|CLAUDE)\\.md$", pass_filenames = false, groups = ["lint"] },
+  # pyproject [project].version is the release single source of truth (maturin
+  # stamps it into every artifact; release tags must match it as v<version>).
+  { id = "version-pep440", name = "pyproject version is valid PEP 440", entry = "uv run python scripts/check_version.py", language = "system", files = "^pyproject\\.toml$|^scripts/check_version\\.py$", pass_filenames = false, groups = ["check"] },
 ]
 
-# ── Rust format/lint ──
+# ── pre-push: tests, mirroring CI (fast subset; slow/e2e stay CI-only) ──
 [[repos]]
 repo = "local"
 hooks = [
-  { id = "cargo-fmt", name = "cargo fmt", entry = "cargo fmt --manifest-path crates/_channels_shm_native/Cargo.toml --", language = "system", types = ["rust"], pass_filenames = false },
-  # cargo-clippy is slow → manual stage only (run with: prek run --hook-stage manual cargo-clippy)
-  { id = "cargo-clippy", name = "cargo clippy", entry = "cargo clippy --manifest-path crates/_channels_shm_native/Cargo.toml --all-targets --all-features -- -D warnings", language = "system", types = ["rust"], pass_filenames = false, stages = ["manual"] },
+  { id = "pytest-fast", name = "pytest (fast, mirrors CI test job)", entry = "uv run pytest -m 'not slow and not e2e' -q", language = "system", files = "\\.py$|^pyproject\\.toml$|^uv\\.lock$", pass_filenames = false, stages = ["pre-push"] },
 ]
 
-# ── CLAUDE.md / AGENTS.md sync check ──
+# ── commit-msg: Conventional Commits (AGENTS.md § Git workflow) ──
 [[repos]]
 repo = "local"
 hooks = [
-  { id = "agents-md-sync", name = "CLAUDE.md == AGENTS.md sync", entry = "diff -q CLAUDE.md AGENTS.md", language = "system", files = "^(CLAUDE|AGENTS)\\.md$", pass_filenames = false },
+  { id = "conventional-commits", name = "commit message format", entry = "uv run python scripts/check_commit_msg.py", language = "system", stages = ["commit-msg"] },
 ]

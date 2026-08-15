@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
+"""Thin adapter: PostToolUse(apply_patch) → prek format+lint on edited files.
+
+Same contract as .claude/hooks/post_tool_use.py (see that file); Codex's
+apply_patch tool reports edits as a patch text, so the edited paths are
+parsed out of it first, then handed to a single prek invocation. Never
+blocks.
+"""
 
 from __future__ import annotations
 
 import json
 import subprocess
 import sys
-from pathlib import PurePath
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 MOVE_TO_PREFIX = "*** Move to: "
 PATCH_FILE_PREFIXES = (
@@ -37,21 +46,6 @@ def extract_edited_paths(command: str) -> list[str]:
     return paths
 
 
-def commands_for(path: PurePath) -> list[list[str]]:
-    match path.suffix:
-        case ".py" | ".pyi":
-            return [
-                ["uv", "run", "ruff", "check", "--fix", str(path)],
-                ["uv", "run", "ruff", "format", str(path)],
-            ]
-        case ".rs":
-            # edition 2021 matches crates/_channels_shm_native/Cargo.toml; rustfmt is
-            # single-file (PostToolUse gets one path), cargo fmt only works crate-wide.
-            return [["rustfmt", "--edition", "2021", str(path)]]
-        case _:
-            return []
-
-
 def main() -> None:
     try:
         payload = json.loads(sys.stdin.read())
@@ -62,27 +56,30 @@ def main() -> None:
     if not isinstance(command, str):
         return
 
-    for raw_path in extract_edited_paths(command):
-        for cmd in commands_for(PurePath(raw_path)):
-            try:
-                result = subprocess.run(
-                    cmd, capture_output=True, check=False, text=True
-                )
-            except FileNotFoundError:
-                print(
-                    f"[codex-post-tool-use] {cmd[0]} not found on PATH; skipped {raw_path}",
-                    file=sys.stderr,
-                )
-                continue
-            if result.returncode != 0:
-                print(
-                    f"[codex-post-tool-use] {cmd[0]} reported issues for {raw_path}:",
-                    file=sys.stderr,
-                )
-                if result.stdout:
-                    print(result.stdout, file=sys.stderr)
-                if result.stderr:
-                    print(result.stderr, file=sys.stderr)
+    paths = extract_edited_paths(command)
+    if not paths:
+        return
+
+    try:
+        result = subprocess.run(
+            ["prek", "run", "--group", "format", "--group", "lint", "--files", *paths],
+            cwd=str(ROOT),
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except FileNotFoundError:
+        print("[codex-post-tool-use] prek not found on PATH; skipped", file=sys.stderr)
+        return
+
+    if result.returncode != 0:
+        print(
+            f"[codex-post-tool-use] prek format+lint on {len(paths)} file(s):",
+            file=sys.stderr,
+        )
+        for stream in (result.stdout, result.stderr):
+            if stream.strip():
+                print(stream, file=sys.stderr)
 
 
 if __name__ == "__main__":

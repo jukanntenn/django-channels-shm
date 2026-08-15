@@ -1,5 +1,7 @@
 name: CI
 
+# Reusable: release.yml calls this workflow as its test gate, so the test
+# matrix exists in exactly one place.
 permissions:
   contents: read
   pull-requests: read   # dorny/paths-filter needs this for PR file lists
@@ -9,6 +11,7 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -21,19 +24,22 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────
   # Job 1: change detection. Every other job reads its outputs.
+  # When called from release.yml (tag push) there is no base to diff
+  # against, so every filter resolves to true — full CI as release gate.
   # ─────────────────────────────────────────────────────────────────────
   changes:
     name: "Detect changes"
     runs-on: ubuntu-latest
     outputs:
-      python: ${{ steps.f.outputs.python }}
-      rust: ${{ steps.f.outputs.rust }}
-      precommit: ${{ steps.f.outputs.precommit }}
-      ci: ${{ steps.f.outputs.ci }}
-      docs_only: ${{ steps.f.outputs.docs_only }}
+      python: ${{ github.event_name == 'workflow_call' && 'true' || steps.f.outputs.python }}
+      rust: ${{ github.event_name == 'workflow_call' && 'true' || steps.f.outputs.rust }}
+      precommit: ${{ github.event_name == 'workflow_call' && 'true' || steps.f.outputs.precommit }}
+      ci: ${{ github.event_name == 'workflow_call' && 'true' || steps.f.outputs.ci }}
+      docs_only: ${{ github.event_name == 'workflow_call' && 'false' || steps.docscheck.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v4
       - id: f
+        if: github.event_name != 'workflow_call'
         uses: dorny/paths-filter@v3
         with:
           filters: |
@@ -42,6 +48,8 @@ jobs:
               - 'tests/**'
               - 'stubs/**'
               - 'bench/**/*.py'
+              - 'scripts/**'
+              - 'examples/**'
               - 'pyproject.toml'
               - 'uv.lock'
             rust:
@@ -49,6 +57,8 @@ jobs:
               - 'build.rs'
             precommit:
               - 'prek.toml'
+              - 'crates/_channels_shm_native/prek.toml'
+              - 'examples/chat/prek.toml'
               - '.typos.toml'
             ci:
               - '.github/workflows/**'
@@ -58,41 +68,41 @@ jobs:
               - '.gitignore'
       - id: docscheck
         # docs_only = docs changed AND nothing else changed
-        if: ${{ steps.f.outputs.python == 'false' && steps.f.outputs.rust == 'false' && steps.f.outputs.precommit == 'false' && steps.f.outputs.ci == 'false' }}
+        if: github.event_name != 'workflow_call' && steps.f.outputs.python == 'false' && steps.f.outputs.rust == 'false' && steps.f.outputs.precommit == 'false' && steps.f.outputs.ci == 'false'
         run: echo "docs_only=true" >> "$GITHUB_OUTPUT"
-      - id: docsneg
-        run: echo "docs_only=${{ (steps.docscheck.outputs.docs_only == 'true') && 'true' || 'false' }}" >> "$GITHUB_OUTPUT"
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 2: format check (python)
+  # Job 2: prek — the single format/lint/check gate (same one that runs
+  # locally on commit). CI installs the toolchains prek's hooks call and
+  # runs prek itself; no ruff/cargo-fmt/clippy invocation is duplicated in
+  # this file. Covers the workspace root + crates + examples/chat configs.
   # ─────────────────────────────────────────────────────────────────────
-  format:
-    name: "ruff format"
+  prek:
+    name: "prek run --all-files"
     needs: changes
-    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.ci == 'true' }}
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.precommit == 'true' || needs.changes.outputs.ci == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --only-group linting
-      - run: uv run ruff format --check .
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable   # cargo fmt + clippy + cargo metadata --locked
+      - run: uv sync --group linting          # ruff for the root project's hooks
+      # examples/chat is an orphan prek project with its own env: its ruff
+      # and uv-lock hooks run there. uv sync builds channels-shm from the
+      # path source through maturin (release build; uv cache holds the wheel).
+      - run: uv sync --group linting
+        working-directory: examples/chat
+      - run: uv tool install prek
+      - run: prek validate-config prek.toml crates/_channels_shm_native/prek.toml examples/chat/prek.toml
+      # Runs every hook in every project (format + lint + check groups) on
+      # all files. Fails if anything needed fixing, any lint fired, or any
+      # lock file is stale.
+      - run: prek run --all-files
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 3: lint check (python)
-  # ─────────────────────────────────────────────────────────────────────
-  lint:
-    name: "ruff check"
-    needs: changes
-    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.ci == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync --only-group linting
-      - run: uv run ruff check .
-
-  # ─────────────────────────────────────────────────────────────────────
-  # Job 4: type check (basedpyright, committed progressive baseline)
+  # Job 3: type check (basedpyright, committed progressive baseline)
   # The committed .basedpyright-baseline.json absorbs the known errors. The
   # first step refreshes it (--writebaseline exits 0 when the file already
   # exists); the second step fails only on NEW errors vs the baseline.
@@ -123,7 +133,7 @@ jobs:
         run: uv run basedpyright --baselinefile .basedpyright-baseline.json
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 5: tests (fast, no slow/e2e)
+  # Job 4: tests (fast, no slow/e2e)
   # ─────────────────────────────────────────────────────────────────────
   test:
     name: "pytest (matrix)"
@@ -153,7 +163,7 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 5b: release-mode smoke (python -O) — verifies the if __debug__:
+  # Job 4b: release-mode smoke (python -O) — verifies the if __debug__:
   # blocks (O3 observability gating) don't break under -O, where those code
   # paths are eliminated. Runs only the fast core subset (F-07 / X-04).
   # ─────────────────────────────────────────────────────────────────────
@@ -180,7 +190,7 @@ jobs:
       - run: uv run python -O -m pytest tests/test_layer.py tests/test_serializer.py tests/test_native/ -q -W "ignore::pytest.PytestConfigWarning"
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 6: cross-process integration (slow, linux only, single version)
+  # Job 5: cross-process integration (slow, linux only, single version)
   # ─────────────────────────────────────────────────────────────────────
   test-cross-process:
     name: "pytest slow (cross-process)"
@@ -196,7 +206,7 @@ jobs:
       - run: uv run pytest -m slow -v
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 7: e2e Django/channels stack (docker compose)
+  # Job 6: e2e Django/channels stack (docker compose)
   # ─────────────────────────────────────────────────────────────────────
   e2e:
     name: "e2e (docker compose)"
@@ -232,10 +242,10 @@ jobs:
         run: docker compose down -v
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 8: Rust checks
+  # Job 7: Rust tests (fmt + clippy live in prek, job 2)
   # ─────────────────────────────────────────────────────────────────────
   rust:
-    name: "cargo fmt + clippy + test"
+    name: "cargo test"
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true' }}
     runs-on: ubuntu-latest
@@ -245,12 +255,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 9: native build verification (maturin)
+  # Job 8: native build verification (maturin)
   # ─────────────────────────────────────────────────────────────────────
   build:
     name: "maturin build"
@@ -266,19 +274,3 @@ jobs:
         with:
           command: build
           args: --release
-
-  # ─────────────────────────────────────────────────────────────────────
-  # Job 10: precommit full sweep (all hooks, all files)
-  # ─────────────────────────────────────────────────────────────────────
-  precommit:
-    name: "prek run --all-files"
-    needs: changes
-    if: ${{ needs.changes.outputs.precommit == 'true' || needs.changes.outputs.ci == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: dtolnay/rust-toolchain@stable   # prek includes cargo fmt/clippy
-      - run: uv tool install prek
-      - run: uv sync --group dev
-      - run: prek run --all-files
