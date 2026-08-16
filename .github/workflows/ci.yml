@@ -227,7 +227,7 @@ jobs:
       - name: "Wait for workers"
         working-directory: tests/e2e
         run: |
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -sf http://localhost:8000 >/dev/null 2>&1 || docker compose ps | grep -q "Up"; then break; fi
             sleep 2
           done
