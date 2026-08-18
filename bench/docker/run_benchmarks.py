@@ -6,8 +6,8 @@ bench/docker/docker-compose.yml). Orchestrates:
 
   1. InMemoryChannelLayer single-process send/receive roundtrip (ceiling)
   2. channels_shm  single-process send/receive roundtrip
-  3. channels_shm  cross-process S2 (send/recv) and S4 (group fanout)
-  4. channels_redis cross-process S2 and S4 (local redis-server)
+  3. channels_shm  cross-process send/recv and group fanout
+  4. channels_redis cross-process send/recv and group fanout (local redis-server)
 
 Prints a JSON summary; the numbers are copied into README.md and
 README.zh-CN.md (run with `python -O` so the release-mode layer is measured).
@@ -24,8 +24,12 @@ import sys
 import time
 import uuid
 
-from bench.cross_process.run_cross_process import run_benchmark, run_group_benchmark
-from bench.cross_process.run_redis_baseline import run_s2, run_s4
+from bench.xproc.run_group_fanout import run_group_fanout
+from bench.xproc.run_redis_baseline import (
+    run_group_fanout as run_group_fanout_redis,
+)
+from bench.xproc.run_redis_baseline import run_send_recv as run_send_recv_redis
+from bench.xproc.run_send_recv import run_send_recv
 from channels.layers import InMemoryChannelLayer
 
 from channels_shm import SharedMemoryChannelLayer
@@ -137,16 +141,18 @@ def main() -> int:
         "channels_shm": roundtrip_benchmark(_shm_layer, prefix),
     }
 
-    results["scenarios"]["s2_cross_process_send_recv"] = {
-        "channels_shm": run_benchmark(f"{prefix}_shm", _CROSS_COUNT),
-        "channels_redis": run_s2(f"{prefix}_rd", _CROSS_COUNT),
+    results["scenarios"]["send_recv_cross_process"] = {
+        "channels_shm": run_send_recv(f"{prefix}_shm", _CROSS_COUNT),
+        "channels_redis": run_send_recv_redis(f"{prefix}_rd", _CROSS_COUNT),
     }
 
-    results["scenarios"]["s4_group_fanout"] = {
-        "channels_shm": run_group_benchmark(
+    results["scenarios"]["group_fanout"] = {
+        "channels_shm": run_group_fanout(
             f"{prefix}_shm", _FANOUT_WORKERS, _CROSS_COUNT
         ),
-        "channels_redis": run_s4(f"{prefix}_rd", _FANOUT_WORKERS, _CROSS_COUNT),
+        "channels_redis": run_group_fanout_redis(
+            f"{prefix}_rd", _FANOUT_WORKERS, _CROSS_COUNT
+        ),
     }
 
     print(json.dumps(results, indent=2))

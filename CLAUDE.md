@@ -10,10 +10,11 @@ hot path + Python for the async API. Linux-only (`MAP_SHARED` + `AF_UNIX`).
 - `crates/_channels_shm_native/`   Rust native module: `atomic`, `ring`, `slab`, `index`, `layout`, `py_bindings`
 - `examples/chat/`           demo + pre-release acceptance app (standalone uv project, prek orphan)
 - `scripts/`                 helper scripts behind prek hooks (Python, stdlib-only)
-- `tests/`                   unit / property / stateful / concurrency tests (default test run)
-- `tests/test_cross_process/`    cross-process integration tests (`@slow`, Linux only)
+- `tests/`                   mirrors `src/channels_shm` layout (unit/property/stateful; default test run): `layer/`, `channel/`, `group/`, `shm/`, `obs/`, `native/`, plus root `test_*.py`
+- `tests/cross_process/`     normal multi-process interop (`@slow`, Linux only)
+- `tests/recovery/`          fault-injection recovery + observability (fork/SIGKILL; `@slow`, Linux only)
 - `tests/e2e/`               Django/channels stack e2e tests (`@e2e`, docker compose)
-- `bench/`                   benchmarks (`pytest-benchmark` Python + `criterion` Rust)
+- `bench/`                   benchmarks: `py/` (pytest-benchmark single-process), `xproc/` (cross-process scripts), `docker/` (pinned-env 3-way), `checks/` (anchor/regression gates); Rust criterion benches live in the crate
 - `stubs/`                   third-party type stubs
 
 ## First-time setup
@@ -83,16 +84,16 @@ no formatter mapping of their own.
 | Test | `cargo test` |
 | Native build | `uvx maturin develop --skip-install` |
 
-### Example app (`examples/chat` — demo + release acceptance)
+### Example app (`examples/chat` — WeChat-style demo + release acceptance)
 
     cd examples/chat
     uv sync                                   # builds channels-shm from ../.. via maturin
-    uv run python manage.py run_workers       # N daphne workers; open two ports in two tabs
+    uv run uvicorn chat.asgi:application --workers 3 --port 8000
     uv run python manage.py demo_broadcast    # headless cross-process acceptance (must PASS)
 
 ### Benchmark (via nox)
 
-`nox -s bench_python | bench_rust | bench_cross | bench | check_regression | check_anchors`
+`nox -s bench_py | bench_rust | bench_cross | bench | check_regression | check_anchors`
 
 ### Typecheck baseline
 

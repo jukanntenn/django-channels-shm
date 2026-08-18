@@ -2,7 +2,8 @@
 # Reproducible 3-way benchmark image: channels-shm vs channels_redis vs
 # InMemoryChannelLayer, constrained to 2 CPUs / 2 GB RAM via docker-compose.
 # stage1: build the native wheel with maturin (abi3 -> Python-version independent)
-FROM rust:1.85-bookworm AS builder
+# rust >= 1.86: the crate's MSRV (Cargo.toml rust-version), not the oldest tag.
+FROM rust:1.86-bookworm AS builder
 WORKDIR /build
 # Install maturin via pip (rust image needs python3-pip first)
 RUN apt-get update -qq && apt-get install -y -qq python3-pip && rm -rf /var/lib/apt/lists/*

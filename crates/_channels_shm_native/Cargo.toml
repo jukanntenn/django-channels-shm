@@ -2,7 +2,7 @@
 name = "_channels_shm_native"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.86"
 build = "build.rs"
 
 [lib]
@@ -37,4 +37,4 @@ name = "bench_index"
 harness = false
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"

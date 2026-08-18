@@ -40,7 +40,7 @@ ASGI worker A ──send──► ┌──────────────�
 
 - **Linux** (x86-64; AArch64 best-effort) — `MAP_SHARED` + `AF_UNIX`
 - **Python ≥ 3.11**
-- **Rust ≥ 1.83** (only needed to build the native extension)
+- **Rust ≥ 1.86** (only needed to build the native extension)
 - **Django ≥ 5.2**, **channels ≥ 4.0** (runtime dependencies)
 
 ## Installation
@@ -140,21 +140,24 @@ docker compose run --rm bench        # prints the full JSON summary
 
 ## Example app
 
-[`examples/chat`](examples/chat/) is a multi-process Django + Channels chat with
-**zero infrastructure** — no Redis, no database. It doubles as the pre-release
-acceptance project: `uv sync` there builds channels-shm from the working tree
-through maturin, and `manage.py demo_broadcast` asserts cross-process fan-out
-headlessly.
+[`examples/chat`](examples/chat/) is a WeChat-style multi-process Django +
+Channels chat with **zero infrastructure** — no Redis, no database. It doubles
+as the pre-release acceptance project: `uv sync` there builds channels-shm from
+the working tree through maturin, and `manage.py demo_broadcast` asserts
+cross-process fan-out headlessly.
 
 ```bash
 cd examples/chat
-uv sync
-uv run python manage.py run_workers      # N daphne workers on consecutive ports
-uv run python manage.py demo_broadcast   # headless acceptance: must print PASSED
+uv sync                                   # builds channels-shm from ../.. via maturin
+uv run uvicorn chat.asgi:application --workers 3 --port 8000
+uv run python manage.py demo_broadcast    # headless acceptance: must print PASSED
 ```
 
-Open two worker ports in two browser tabs; each chat line is tagged with the
-PID of the worker that handled it — messages hop processes via `/dev/shm`.
+Open <http://127.0.0.1:8000/> in several tabs, pick nicknames, and chat —
+private chats by nickname, group chats by group name (max 500 members). All
+tabs hit the same port; the kernel spreads connections over the worker
+processes, and every message crosses them via `/dev/shm` (hover a message to
+see which worker PID delivered it).
 
 ## Testing
 

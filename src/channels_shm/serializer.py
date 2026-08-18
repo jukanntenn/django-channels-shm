@@ -78,9 +78,9 @@ def normalize_message(message: Message) -> Message:
     return cast("Message", _normalize_value(message))
 
 
-def _normalize_value(value: MessageValue) -> MessageValue:
+def _normalize_value(value: MessageValue | tuple[MessageValue, ...]) -> MessageValue:
     """Recursively normalize a value (tuple → list)."""
-    if isinstance(value, list):
+    if isinstance(value, tuple | list):
         return [_normalize_value(v) for v in value]
     if isinstance(value, dict):
         return {k: _normalize_value(v) for k, v in value.items()}

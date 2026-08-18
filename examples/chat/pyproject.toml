@@ -1,11 +1,14 @@
 [project]
 name = "chat-example"
 version = "0.1.0"
-description = "channels-shm demo: multi-process chat with zero infrastructure (no Redis, no DB)"
+description = "channels-shm demo: WeChat-style multi-process chat with zero infrastructure (no Redis, no DB)"
 requires-python = ">=3.11"
 dependencies = [
     "django>=4.2",
-    "channels[daphne]>=4.0",
+    "channels>=4.0",
+    # One ASGI server for both dev (--reload) and the multi-worker demo
+    # (--workers N): one port, N Django processes, no custom supervisor.
+    "uvicorn[standard]>=0.30",
     "channels-shm",
 ]
 

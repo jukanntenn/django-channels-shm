@@ -83,12 +83,12 @@ SEND_SPIN_BOUND = 3
 SEND_RETRY_BASE_DELAY = 0.01
 SEND_RETRY_JITTER = 0.002
 
-# AF_UNIX socket path sizing (§13.1 V4.1): usable path ≤ 107 bytes
-# (sun_path[108] with NUL terminator). Path = "{prefix}_wakeup/{client_prefix}.sock"
-# = len(prefix) + len("_wakeup/") + 32 (uuid4 hex) + len(".sock")
-# = len(prefix) + 8 + 32 + 5 = len(prefix) + 45  →  len(prefix) ≤ 62.
+# AF_UNIX socket path sizing: usable path ≤ 107 bytes (sun_path[108] with NUL
+# terminator). The wakeup socket path is "/dev/shm/{prefix}_wakeup/{client_prefix}.sock":
+# len("/dev/shm/") + len(prefix) + len("_wakeup/") + 32 (uuid4 hex) + len(".sock")
+# = 9 + len(prefix) + 8 + 32 + 5 = len(prefix) + 54  →  len(prefix) ≤ 53.
 AF_UNIX_PATH_MAX = 107
-CHANNEL_SUFFIX_MAX = 45
+CHANNEL_SUFFIX_MAX = 54
 
 
 class SharedMemoryChannelLayer(BaseChannelLayer):
@@ -161,7 +161,7 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
         # valid at runtime (it only stores expiry/capacity).
         super().__init__(expiry=expiry, capacity=capacity)  # type: ignore[call-arg]
 
-        # Validate prefix length (§13.1 V4.1): len(prefix)+45 ≤ 107 → len(prefix) ≤ 62
+        # Validate prefix length: len(prefix)+54 ≤ 107 → len(prefix) ≤ 53
         max_prefix_len = AF_UNIX_PATH_MAX - CHANNEL_SUFFIX_MAX
         if len(prefix) > max_prefix_len:
             msg = (

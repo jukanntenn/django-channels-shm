@@ -167,7 +167,6 @@ ignore = [
     "RUF006",    # asyncio-store-unused-variable — fire-and-forget tasks common in concurrency tests
 ]
 "bench/**" = [
-    "INP001",    # implicit-namespace-package — bench is not an importable package
     "S101",      # assert — used in benchmark sanity checks
     "ANN",       # annotations — not required in benchmarks
     "D",         # docstrings — not required in benchmarks
@@ -175,7 +174,7 @@ ignore = [
     "PT011",     # pytest-raises-too-broad — irrelevant in benches
     "T20",       # print — benchmark output uses print
     "RUF012",
-    "PLR0915",   # too-many-statements — white-box crash-injection tests legitimately run long (slot setup, injection, multi-step recovery assertion)
+    "PLR0915",   # too-many-statements — white-box recovery tests legitimately run long (slot setup, injection, multi-step recovery assertion)
 ]
 
 # ruff formatter (Black-compatible default style). Required: COM812/ISC001 above
@@ -185,8 +184,11 @@ docstring-code-format = true
 docstring-code-line-length = "dynamic"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "bench"]
-python_files = ["test_*.py", "bench_*.py"]
+# bench/ runs only via `nox -s bench_py` (release build + --benchmark-* flags);
+# running pytest-benchmark in the default gate would produce release-inaccurate
+# numbers nobody reads and slow the correctness run.
+testpaths = ["tests"]
+python_files = ["test_*.py"]
 addopts = [
     "-ra",
     "--strict-markers",

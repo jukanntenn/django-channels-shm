@@ -187,7 +187,7 @@ jobs:
       # -W ignores the pytest "assertions not executed" config warning that -O
       # itself triggers (pyproject's filterwarnings=error would otherwise fail
       # the run before any test executes).
-      - run: uv run python -O -m pytest tests/test_layer.py tests/test_serializer.py tests/test_native/ -q -W "ignore::pytest.PytestConfigWarning"
+      - run: uv run python -O -m pytest tests/layer/ tests/test_serializer.py tests/native/ -q -W "ignore::pytest.PytestConfigWarning"
 
   # ─────────────────────────────────────────────────────────────────────
   # Job 5: cross-process integration (slow, linux only, single version)

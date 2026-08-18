@@ -1,59 +1,143 @@
-<!DOCTYPE html>
-<html lang="en">
+{% load static %}<!DOCTYPE html>
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>channels-shm chat demo</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
-    #log { border: 1px solid #ccc; border-radius: 6px; height: 18rem; overflow-y: auto; padding: .5rem 1rem; margin-bottom: .5rem; }
-    .pid { color: #888; font-size: .8em; }
-    .system { color: #080; }
-    form { display: flex; gap: .5rem; }
-    input[type=text] { flex: 1; padding: .4rem .6rem; }
-    button { padding: .4rem 1.2rem; }
-  </style>
+  <title>SHM Chat</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2307C160'/%3E%3Cpath d='M32 16c-9.9 0-18 6.4-18 14.3 0 4.5 2.6 8.6 6.6 11.2-.3 2.3-1.3 4.4-3 6.1-.5.5-.1 1.4.6 1.3 3.8-.4 7-1.9 9.4-3.4 1.4.3 2.9.4 4.4.4 9.9 0 18-6.4 18-14.3S41.9 16 32 16z' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="{% static 'chat/style.css' %}">
 </head>
 <body>
-  <h1>channels-shm chat</h1>
-  <p>
-    Messages are broadcast to every client through the shared-memory channel
-    layer. Each line shows which <em>worker process</em> handled it — open this
-    page on two worker ports (see <code>manage.py run_workers</code>) and send
-    messages from both: they cross processes via <code>/dev/shm</code>, with no
-    Redis and no database.
-  </p>
-  <div id="log"></div>
-  <form id="f"><input type="text" id="msg" placeholder="Say something…" autocomplete="off"><button>Send</button></form>
-  <script>
-    const log = document.getElementById("log");
-    const proto = location.protocol === "https:" ? "wss://" : "ws://";
-    const ws = new WebSocket(proto + location.host + "/ws/chat/");
+<div id="app" class="app">
 
-    function add(text, cls) {
-      const div = document.createElement("div");
-      div.className = cls || "";
-      div.textContent = text;
-      log.appendChild(div);
-      log.scrollTop = log.scrollHeight;
-    }
+  <!-- ── 登录 ─────────────────────────────────────────────── -->
+  <section id="login" class="login">
+    <div class="login-card">
+      <div class="brand">
+        <svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true">
+          <rect width="64" height="64" rx="14" fill="#07C160"/>
+          <path d="M32 16c-9.9 0-18 6.4-18 14.3 0 4.5 2.6 8.6 6.6 11.2-.3 2.3-1.3 4.4-3 6.1-.5.5-.1 1.4.6 1.3 3.8-.4 7-1.9 9.4-3.4 1.4.3 2.9.4 4.4.4 9.9 0 18-6.4 18-14.3S41.9 16 32 16z" fill="#fff"/>
+        </svg>
+      </div>
+      <h1>SHM Chat</h1>
+      <p class="tagline">共享内存通道层上的即时聊天 · 无需注册</p>
+      <form id="login-form" autocomplete="off">
+        <input id="login-nick" type="text" placeholder="输入昵称" maxlength="24"
+               autocomplete="off" spellcheck="false" autofocus>
+        <button id="login-btn" type="submit" disabled>进入聊天</button>
+      </form>
+      <p id="login-error" class="login-error" hidden></p>
+      <p id="login-foot" class="login-foot">正在连接服务…</p>
+    </div>
+  </section>
 
-    ws.onopen = () => add("connected", "system");
-    ws.onclose = () => add("disconnected — reload to retry", "system");
-    ws.onerror = () => add("websocket error — is the ASGI server (daphne) running?", "system");
-    ws.onmessage = (ev) => {
-      const m = JSON.parse(ev.data);
-      if (m.kind === "welcome") {
-        add(`connected to worker PID ${m.connected_to_pid}`, "system");
-      } else {
-        add(`${m.text}   [handled by worker PID ${m.handled_by_pid}]`);
-      }
-    };
-    document.getElementById("f").onsubmit = (ev) => {
-      ev.preventDefault();
-      const input = document.getElementById("msg");
-      if (input.value) { ws.send(JSON.stringify({ text: input.value })); input.value = ""; }
-    };
-  </script>
+  <!-- ── 主界面 ───────────────────────────────────────────── -->
+  <section id="main" class="main" hidden>
+    <aside class="side">
+      <header class="side-head">
+        <div class="me">
+          <div id="me-avatar" class="avatar"></div>
+          <div id="me-name" class="me-name"></div>
+        </div>
+        <button id="btn-new" class="icon-btn" type="button" title="发起聊天">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" fill="currentColor"/>
+          </svg>
+        </button>
+      </header>
+      <div class="side-search">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path d="M10 4a6 6 0 1 0 3.47 10.9l4.31 4.31 1.42-1.42-4.31-4.31A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z" fill="currentColor"/>
+        </svg>
+        <input id="search" type="text" placeholder="搜索" autocomplete="off" spellcheck="false">
+      </div>
+      <nav id="conv-list" class="conv-list" aria-label="会话列表"></nav>
+      <footer class="side-foot">
+        <span class="net"><span id="net-dot" class="dot dot-on"></span><span id="net-text">已连接</span></span>
+        <span id="pid-tag" class="pid-tag"></span>
+      </footer>
+    </aside>
+
+    <main class="chat">
+      <div id="chat-empty" class="chat-empty">
+        <svg viewBox="0 0 64 64" width="72" height="72" aria-hidden="true">
+          <rect width="64" height="64" rx="14" fill="#E8E8E8"/>
+          <path d="M32 16c-9.9 0-18 6.4-18 14.3 0 4.5 2.6 8.6 6.6 11.2-.3 2.3-1.3 4.4-3 6.1-.5.5-.1 1.4.6 1.3 3.8-.4 7-1.9 9.4-3.4 1.4.3 2.9.4 4.4.4 9.9 0 18-6.4 18-14.3S41.9 16 32 16z" fill="#fff"/>
+        </svg>
+        <p>选择左侧会话,或点击 <b>+</b> 发起私聊 / 加入群聊</p>
+      </div>
+
+      <div id="chat-pane" class="chat-pane" hidden>
+        <header class="chat-head">
+          <button id="btn-back" class="icon-btn back" type="button" title="返回">‹</button>
+          <div class="chat-head-info">
+            <div id="chat-title" class="chat-title"></div>
+            <div id="chat-sub" class="chat-sub"></div>
+          </div>
+          <button id="btn-members" class="icon-btn" type="button" title="群成员" hidden>
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-3.9 0-7 2-7 4.5V20h14v-2.5C16 15 12.9 13 9 13zm8-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm.8 2.3c1.9.7 3.2 2 3.2 3.7V20h-3v-2.5c0-1.3-.5-2.5-1.4-3.4.4-.1.8-.1 1.2 0z" fill="currentColor" transform="translate(-1)"/>
+            </svg>
+          </button>
+        </header>
+
+        <div class="chat-body">
+          <div id="msgs" class="msgs" aria-live="polite"></div>
+          <button id="btn-jump" class="jump" type="button" hidden>↓ 有新消息</button>
+        </div>
+
+        <footer class="composer">
+          <textarea id="input" rows="1" maxlength="2000" placeholder="输入消息…"></textarea>
+          <div class="composer-bar">
+            <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+            <button id="btn-send" class="btn-send" type="button">发送</button>
+          </div>
+        </footer>
+
+        <aside id="members" class="members" hidden>
+          <header class="members-head">群成员 <span id="members-count"></span></header>
+          <ul id="members-list" class="members-list"></ul>
+        </aside>
+      </div>
+    </main>
+  </section>
+
+  <!-- ── 发起聊天弹窗 ──────────────────────────────────────── -->
+  <div id="modal" class="modal hidden" hidden>
+    <div class="modal-mask" id="modal-mask"></div>
+    <div class="modal-card">
+      <header class="modal-head">
+        <button id="tab-pm" class="modal-tab active" type="button">发起私聊</button>
+        <button id="tab-group" class="modal-tab" type="button">加入群聊</button>
+        <button id="modal-close" class="icon-btn" type="button" title="关闭">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z" fill="currentColor"/>
+          </svg>
+        </button>
+      </header>
+      <div id="pane-pm" class="modal-pane">
+        <div class="modal-filter">
+          <input id="pm-filter" type="text" placeholder="搜索在线用户" autocomplete="off" spellcheck="false">
+        </div>
+        <ul id="pm-list" class="pick-list"></ul>
+        <p id="pm-empty" class="modal-empty" hidden>当前没有其他在线用户</p>
+        <div class="modal-form modal-form--foot">
+          <input id="pm-direct" type="text" placeholder="或输入昵称直接发起" maxlength="24" autocomplete="off" spellcheck="false">
+          <button id="btn-pm-direct" class="btn-send" type="button">发起</button>
+        </div>
+      </div>
+      <div id="pane-group" class="modal-pane" hidden>
+        <div class="modal-form">
+          <input id="group-name" type="text" placeholder="群名称(不存在则自动创建)" maxlength="30" autocomplete="off" spellcheck="false">
+          <button id="btn-join" class="btn-send" type="button">加入</button>
+        </div>
+        <p class="modal-note">第一个加入的人创建该群;群聊最多 500 人。</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+</div>
+<script src="{% static 'chat/app.js' %}"></script>
 </body>
 </html>

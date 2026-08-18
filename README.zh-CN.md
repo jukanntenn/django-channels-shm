@@ -38,7 +38,7 @@ ASGI worker A ──send──► ┌──────────────�
 
 - **Linux**（x86-64；AArch64 尽力支持）—— 依赖 `MAP_SHARED` 与 `AF_UNIX`
 - **Python ≥ 3.11**
-- **Rust ≥ 1.83**（仅构建原生扩展时需要）
+- **Rust ≥ 1.86**（仅构建原生扩展时需要）
 - **Django ≥ 5.2**、**channels ≥ 4.0**（运行时依赖）
 
 ## 安装

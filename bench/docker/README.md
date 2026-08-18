@@ -17,8 +17,8 @@ The container:
 3. measures:
    - `InMemoryChannelLayer` single-process send+receive roundtrip
    - `channels_shm` single-process roundtrip
-   - `channels_shm` cross-process S2 (send/recv) and S4 (group fan-out, 4 workers)
-   - `channels_redis` S2 and S4 (same scenarios)
+   - `channels_shm` cross-process send/recv and group fan-out (4 workers)
+   - `channels_redis` send/recv and group fan-out (same scenarios)
 
 ## Results
 

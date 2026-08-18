@@ -1,4 +1,4 @@
-"""Nox sessions for benchmarks + observability (P3 unified entry).
+"""Nox sessions for benchmarks + recovery/observability tests.
 
 Run modes:
   release (default): python -O + Rust no features -> real production performance
@@ -13,23 +13,29 @@ nox.options.default_venv_backend = "none"
 
 
 @nox.session(venv_backend="none")
-def bench_python(session: nox.Session) -> None:
-    """P1 layer 1-2: pytest-benchmark, RELEASE build (python -O, no observability)."""
+def bench_py(session: nox.Session) -> None:
+    """Single-process pytest-benchmark suite, RELEASE build (python -O)."""
     session.run(
         "python",
         "-O",
         "-m",
         "pytest",
-        "bench/python/",
+        "bench/py/",
+        # -O strips asserts; pytest warns about that, which filterwarnings=error
+        # would otherwise turn into a hard failure at collection time.
+        "-W",
+        "ignore::pytest.PytestConfigWarning",
         "--benchmark-autosave",
         "--benchmark-disable-gc",
+        "--benchmark-json",
+        "bench/results/py_latest.json",
         *session.posargs,
     )
 
 
 @nox.session(venv_backend="none")
 def bench_rust(session: nox.Session) -> None:
-    """P1 layer 0: criterion Rust microbenchmarks, release build."""
+    """Criterion Rust microbenchmarks, release build."""
     session.run(
         "cargo",
         "bench",
@@ -45,41 +51,39 @@ def bench_rust(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def bench_cross(session: nox.Session) -> None:
-    """P1 layer 3: cross-process multiprocessing benchmark."""
-    session.run("python", "bench/cross_process/run_cross_process.py", *session.posargs)
+    """Cross-process scenario benchmarks (multiprocessing, slow)."""
+    session.run("python", "-m", "bench.xproc.run_send_recv", *session.posargs)
+    session.run("python", "-m", "bench.xproc.run_group_fanout", *session.posargs)
 
 
 @nox.session(venv_backend="none")
-def bench_crash_injection(session: nox.Session) -> None:
-    """X1 §15: crash injection + observability assertions. DEV build (observability ON)."""
-    session.run(
-        "python", "-m", "pytest", "bench/crash_injection/", "-v", *session.posargs
-    )
+def test_recovery(session: nox.Session) -> None:
+    """Fault-injection recovery + observability assertions. DEV build (observability ON)."""
+    session.run("python", "-m", "pytest", "tests/recovery/", "-v", *session.posargs)
 
 
 @nox.session(venv_backend="none")
 def test_observability(session: nox.Session) -> None:
-    """X1: verify observability instrumentation itself works. DEV build."""
-    session.run(
-        "python", "-m", "pytest", "bench/", "-k", "observability", *session.posargs
-    )
+    """Verify the observability instrumentation itself works. DEV build."""
+    session.run("python", "-m", "pytest", "tests/obs/", *session.posargs)
 
 
 @nox.session(venv_backend="none")
 def bench(session: nox.Session) -> None:
     """Aggregate: run all release benchmarks."""
-    session.notify("bench_python")
+    session.notify("bench_py")
     session.notify("bench_rust")
     session.notify("bench_cross")
 
 
 @nox.session(venv_backend="none")
 def check_regression(session: nox.Session) -> None:
-    """P3 layer B: check criterion regression."""
-    session.run("python", "bench/check_criterion_regression.py")
+    """Check criterion regression (relative drift; >10% mean fails)."""
+    session.run("python", "-m", "bench.checks.check_criterion_regression")
 
 
 @nox.session(venv_backend="none")
 def check_anchors(session: nox.Session) -> None:
-    """P3 layer C: spec absolute anchor assertions."""
-    session.run("python", "bench/check_anchors.py")
+    """Assert absolute anchors: criterion Rust microbenchmarks + py suite."""
+    session.run("python", "-m", "bench.checks.check_criterion_anchors")
+    session.run("python", "-m", "bench.checks.check_py_anchors")

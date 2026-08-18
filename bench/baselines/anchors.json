@@ -1,0 +1,78 @@
+{
+  "bench/py/test_send.py::test_send[websocket_event]": {
+    "max_median_s": 2e-05,
+    "why": "inline send (producer path) baseline ~5us; guard the emergency-drain regression that makes it ms"
+  },
+  "bench/py/test_send.py::test_send[http_request_boundary]": {
+    "max_median_s": 2e-05,
+    "why": "largest inline send ~5us"
+  },
+  "bench/py/test_send.py::test_send[http_request_100kb]": {
+    "max_median_s": 8e-05,
+    "why": "overflow send ~24us"
+  },
+  "bench/py/test_receive.py::test_receive_shm[websocket_event]": {
+    "max_median_s": 2e-05,
+    "why": "consumer path (wakeup+drain+deliver) ~5us"
+  },
+  "bench/py/test_receive.py::test_receive_shm[http_request_100kb]": {
+    "max_median_s": 2e-05,
+    "why": "consumer path with overflow message ~5us"
+  },
+  "bench/py/test_receive.py::test_receive_inmemory": {
+    "max_median_s": 2e-05,
+    "why": "InMemory baseline receive ~4.5us"
+  },
+  "bench/py/test_roundtrip.py::test_roundtrip_shm[websocket_event]": {
+    "max_median_s": 4e-05,
+    "why": "end-to-end roundtrip ~12us"
+  },
+  "bench/py/test_roundtrip.py::test_roundtrip_shm[http_request_100kb]": {
+    "max_median_s": 8e-05,
+    "why": "roundtrip with overflow message ~21us"
+  },
+  "bench/py/test_roundtrip.py::test_roundtrip_inmemory": {
+    "max_median_s": 3e-05,
+    "why": "InMemory baseline roundtrip ~9us"
+  },
+  "bench/py/test_group.py::test_group_send_shm": {
+    "max_median_s": 4e-05,
+    "why": "8-member fanout ~11us (single serialize + dedup wakeup)"
+  },
+  "bench/py/test_group.py::test_group_send_inmemory": {
+    "max_median_s": 1e-04,
+    "why": "InMemory baseline 8-member fanout ~36us"
+  },
+  "bench/py/test_serializer.py::test_pack[websocket_event]": {
+    "max_median_s": 1e-06,
+    "why": "pack small ~0.23us"
+  },
+  "bench/py/test_serializer.py::test_pack[http_request_boundary]": {
+    "max_median_s": 1e-06,
+    "why": "pack boundary ~0.21us"
+  },
+  "bench/py/test_serializer.py::test_pack[http_request_100kb]": {
+    "max_median_s": 1e-05,
+    "why": "pack overflow ~1.8us"
+  },
+  "bench/py/test_serializer.py::test_pack[http_request_1mb]": {
+    "max_median_s": 1e-04,
+    "why": "pack max-size ~25us"
+  },
+  "bench/py/test_serializer.py::test_unpack[websocket_event]": {
+    "max_median_s": 1e-06,
+    "why": "unpack small ~0.17us"
+  },
+  "bench/py/test_serializer.py::test_unpack[http_request_boundary]": {
+    "max_median_s": 1e-06,
+    "why": "unpack boundary ~0.18us"
+  },
+  "bench/py/test_serializer.py::test_unpack[http_request_100kb]": {
+    "max_median_s": 1e-05,
+    "why": "unpack overflow ~3.3us"
+  },
+  "bench/py/test_serializer.py::test_unpack[http_request_1mb]": {
+    "max_median_s": 1.5e-04,
+    "why": "unpack max-size ~35us"
+  }
+}

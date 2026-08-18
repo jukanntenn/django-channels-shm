@@ -5,8 +5,8 @@
 #
 # The benchmark container runs:
 #   - InMemoryChannelLayer  (single-process roundtrip ceiling)
-#   - channels_shm          (cross-process S2 send/recv + S4 group fanout)
-#   - channels_redis        (same S2/S4 scenarios via a local redis-server)
+#   - channels_shm          (cross-process send/recv + group fanout)
+#   - channels_redis        (same scenarios via a local redis-server)
 # and prints a JSON summary that is copied into README.md / README.zh-CN.md.
 services:
   bench:

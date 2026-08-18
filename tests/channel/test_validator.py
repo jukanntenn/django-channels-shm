@@ -1,17 +1,24 @@
-"""Unit tests for channels_shm.channel.validator.
+"""Unit and property tests for channels_shm.channel.validator.
 
-Maps to src/channels_shm/channel/validator.py. Covers all validation error
-paths plus a property test for valid-name acceptance (migrated from
-tests/test_properties.py).
+Maps to src/channels_shm/channel/validator.py. Covers every validation error
+path plus property tests proving the *complement* (all valid names) is
+accepted. Note: the `receive=True` branch is not used by layer.receive (a
+process-specific owner's own channel does not end in '!'), so it is exercised
+here directly.
 """
 
 from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 
 from channels_shm.channel.validator import validate_channel_name, validate_group_name
-from tests.strategies import st_channel_names
+from tests.strategies import (
+    st_channel_names,
+    st_group_names,
+    st_process_specific_channels,
+    st_receive_channel_names,
+)
 
 
 class TestChannelNameErrors:
@@ -52,7 +59,24 @@ class TestGroupNameErrors:
 
 
 @given(name=st_channel_names())
-@settings(max_examples=50)
 def test_valid_channel_name_accepted(name: str) -> None:
     """Valid channel names should pass validation."""
     validate_channel_name(name)  # Should not raise
+
+
+@given(name=st_process_specific_channels())
+def test_valid_process_specific_name_accepted(name: str) -> None:
+    """Valid process-specific names (one '!') pass validation."""
+    validate_channel_name(name)  # Should not raise
+
+
+@given(name=st_receive_channel_names())
+def test_valid_receive_name_accepted(name: str) -> None:
+    """A name ending in '!' passes the receive-side validation."""
+    validate_channel_name(name, receive=True)  # Should not raise
+
+
+@given(name=st_group_names())
+def test_valid_group_name_accepted(name: str) -> None:
+    """Valid group names should pass validation."""
+    validate_group_name(name)  # Should not raise

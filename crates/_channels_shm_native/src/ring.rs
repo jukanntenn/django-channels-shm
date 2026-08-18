@@ -422,12 +422,25 @@ impl Ring {
             let seq = region.load_u64(slot_off + layout::SLOT_SEQ);
             let owner_pid = region.read_u32(slot_off + layout::SLOT_OWNER_PID);
 
-            // P = next ticket targeting this slot
+            // P = next ticket targeting this slot: the smallest ticket >= max_pos
+            // that satisfies ticket % cap == i. The naive ((max_pos/cap)+1)*cap+i
+            // is one full round ahead whenever max_pos % cap <= i, which repairs
+            // healthy slots to a future ticket and deadlocks the next enqueue in
+            // the seq>pos spin branch (docs/BUGS.md).
             let max_pos = enq.max(deq);
-            let p = ((max_pos / cap) + 1) * cap + i as u64;
+            let base = (max_pos / cap) * cap;
+            let p = if max_pos % cap <= i as u64 {
+                base + i as u64
+            } else {
+                base + cap + i as u64
+            };
 
-            // Condition (a): seq < P AND owner == 0
-            if seq < p && owner_pid == 0 {
+            // Condition (a): seq behind the LAST completed round AND owner == 0.
+            // A dead slot's seq is at most max_pos - cap (the burnt ticket was
+            // issued at <= max_pos and its slot seq is one round behind), so
+            // comparing against max_pos - cap keeps healthy slots (seq == p,
+            // the next ticket >= max_pos) out of the repair path.
+            if seq <= max_pos.saturating_sub(cap) && owner_pid == 0 {
                 let compact_mark = region.read_u8(slot_off + layout::SLOT_COMPACT_MARK);
 
                 if compact_mark == 1 {
@@ -840,6 +853,160 @@ mod tests {
             ring.compact(&region, &slab, start_time);
             let mark = region.read_u8(slot_off + layout::SLOT_COMPACT_MARK);
             assert_eq!(mark, 0, "second compact should clear the mark");
+        }
+    }
+
+    #[test]
+    fn test_ring_compact_repairs_to_next_ticket_not_ahead() {
+        // Regression test for the compact p-formula bug (docs/BUGS.md):
+        // p must be the NEXT ticket targeting the slot, not one full round ahead.
+        // Pure-API repro (no manual memory writes):
+        //   1. fill ring (tickets 0-3)
+        //   2. 4 more enqueues -> Full (burns tickets 4-7, dead slot forms)
+        //   3. drain
+        //   4. 8 more enqueues -> all burnt (8-15)   enq=16 deq=4
+        //   5. compact #1 (mark)
+        //   6. 8 more enqueues -> all burnt (16-23)  enq=24
+        //   7. compact #2 (repair)
+        //   assert slot0.seq == 24 (next ticket), NOT 28 (one round ahead).
+        // With the bug, seq is repaired to 28 and ticket 24 then hits the
+        // seq>pos spin branch (permanent deadlock).
+        let cap = 4u32;
+        let (_buf, region, ring, slab) = setup_ring(cap, 512);
+        let pid = 1u32;
+        let start_time = 0u64;
+        let expiry = f64::MAX;
+        let owner = OwnerIdentity { pid, start_time };
+
+        unsafe {
+            // 1. Fill ring
+            for _ in 0..4 {
+                assert_eq!(
+                    ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
+                    EnqueueResult::Ok
+                );
+            }
+            // 2. Ring full -> every further enqueue burns a ticket (Full)
+            for _ in 0..4 {
+                assert_eq!(
+                    ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
+                    EnqueueResult::Full
+                );
+            }
+            // 3. Drain
+            for _ in 0..4 {
+                assert!(ring.try_dequeue(&region, &slab, f64::MAX, owner).is_some());
+            }
+            // 4. Dead slots: all tickets 8-15 burnt -> enq=16, deq=4
+            for _ in 0..8 {
+                assert_eq!(
+                    ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
+                    EnqueueResult::Full
+                );
+            }
+            assert_eq!(
+                region.load_u64(ring.ring_offset + layout::RING_ENQUEUE_POS),
+                16
+            );
+            assert_eq!(
+                region.load_u64(ring.ring_offset + layout::RING_DEQUEUE_POS),
+                4
+            );
+
+            // 5. Compact #1: advancement 16 >= 2*cap=8 -> marks all slots
+            ring.compact(&region, &slab, start_time);
+
+            // 6. More burnt tickets 16-23 -> enq=24
+            for _ in 0..8 {
+                assert_eq!(
+                    ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
+                    EnqueueResult::Full
+                );
+            }
+
+            // 7. Compact #2: advancement 8 >= 8 -> repairs
+            ring.compact(&region, &slab, start_time);
+
+            // After repair, slot0.seq must equal the next ticket targeting
+            // slot 0 (24). The buggy formula ((24/4)+1)*4+0=28 is one round
+            // ahead and deadlocks ticket 24 in the seq>pos spin branch.
+            let slot0_off = ring.ring_offset + layout::RING_HEADER_SIZE;
+            let seq = region.load_u64(slot0_off + layout::SLOT_SEQ);
+            assert_eq!(
+                seq, 24,
+                "compact must repair slot to the next ticket (24), got {seq} (bug: one round ahead)"
+            );
+
+            // 8. And enqueue of ticket 24 must succeed (not spin on seq>pos).
+            // Guarded by a timeout so a regression fails fast instead of hanging.
+            use std::sync::mpsc;
+            let (tx, rx) = mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                let result = ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner);
+                tx.send(result).unwrap();
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(result) => {
+                    assert_eq!(
+                        result,
+                        EnqueueResult::Ok,
+                        "ticket 24 must enqueue after repair"
+                    );
+                }
+                Err(_) => {
+                    panic!("enqueue after compact hangs (seq>pos spin) — compact p-formula bug")
+                }
+            }
+            let _ = handle.join();
+        }
+    }
+
+    #[test]
+    fn test_ring_compact_does_not_touch_healthy_slots() {
+        // Healthy ring must survive compact unchanged: seqs stay at the next
+        // ticket values and enqueue keeps working.
+        let cap = 4u32;
+        let (_buf, region, ring, slab) = setup_ring(cap, 512);
+        let pid = 1u32;
+        let start_time = 0u64;
+        let expiry = f64::MAX;
+        let owner = OwnerIdentity { pid, start_time };
+
+        unsafe {
+            // Drive 8 enq+deq: enq=deq=8, seqs=[8,9,10,11] (all healthy EMPTY)
+            for _ in 0..8 {
+                ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner);
+                ring.try_dequeue(&region, &slab, f64::MAX, owner);
+            }
+            // Compact #1 (advancement 8 >= 8): must NOT mark healthy slots
+            ring.compact(&region, &slab, start_time);
+            for i in 0..4 {
+                let slot_off = ring.ring_offset + layout::RING_HEADER_SIZE + i * layout::SLOT_SIZE;
+                let mark = region.read_u8(slot_off + layout::SLOT_COMPACT_MARK);
+                assert_eq!(mark, 0, "healthy slot {i} must not be marked");
+            }
+            // Drive 8 more: enq=16
+            for _ in 0..8 {
+                ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner);
+                ring.try_dequeue(&region, &slab, f64::MAX, owner);
+            }
+            // Compact #2: must not modify healthy seqs
+            ring.compact(&region, &slab, start_time);
+            for i in 0..4 {
+                let slot_off = ring.ring_offset + layout::RING_HEADER_SIZE + i * layout::SLOT_SIZE;
+                let seq = region.load_u64(slot_off + layout::SLOT_SEQ);
+                assert_eq!(
+                    seq,
+                    16 + i as u64,
+                    "healthy slot {i} seq must stay at next ticket ({})",
+                    16 + i
+                );
+            }
+            // Enqueue must still work immediately (ticket 16 -> slot 0)
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
+                EnqueueResult::Ok
+            );
         }
     }
 
