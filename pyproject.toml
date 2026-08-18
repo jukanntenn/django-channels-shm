@@ -62,7 +62,7 @@ dev = [
 python-source = "src"
 manifest-path = "crates/_channels_shm_native/Cargo.toml"
 module-name = "channels_shm._native"
-features = ["pyo3/abi3-py311", "pyo3/extension-module"]
+features = ["extension-module"]
 
 [tool.uv]
 # examples/chat is a standalone uv project with its own lock (it depends on

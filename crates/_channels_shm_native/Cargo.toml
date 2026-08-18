@@ -14,6 +14,7 @@ pyo3 = { version = "0.29", features = ["abi3-py311"] }
 libc = "0.2"
 
 [features]
+extension-module = ["pyo3/extension-module"]  # maturin wheel builds; skips libpython link
 metrics = []            # O3: Rust hot-path metrics gating (Counter/Histogram)
 tracing_events = []     # O3: Rust cold-path event logging gating (recover/compact/pid_dead)
 
