@@ -2,7 +2,7 @@
 
 Runs all three channel layers in one Docker container pinned to
 **2 CPUs / 2 GB RAM** — the hardware constraint documented in
-`README.md` / `README.zh-CN.md`.
+`README.md` / `README.zh.md`.
 
 ## Run
 

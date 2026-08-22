@@ -1,11 +1,10 @@
 # channels-shm
 
+English | [中文](README.zh.md)
+
 [![CI](https://github.com/jukanntenn/django-channels-shm/actions/workflows/ci.yml/badge.svg)](https://github.com/jukanntenn/django-channels-shm/actions/workflows/ci.yml)
 
-A high-performance **shared-memory channel layer for Django Channels**,
-designed for single-machine multi-process deployments. Messages travel between
-ASGI workers through an `mmap(MAP_SHARED)` region in `/dev/shm` — no Redis, no
-TCP, no broker — while the hot path runs in a **Rust native extension (PyO3)**.
+A high-performance **shared-memory channel layer for Django Channels**, designed for single-machine multi-process deployments. Messages travel between ASGI workers through an `mmap(MAP_SHARED)` region in `/dev/shm` — no Redis, no TCP, no broker — while the hot path runs in a **Rust native extension (PyO3)**.
 
 ```
 ASGI worker A ──send──► ┌───────────────────────────────┐ ──receive──► ASGI worker B
@@ -18,23 +17,13 @@ ASGI worker A ──send──► ┌──────────────�
 
 ## Features
 
-- **Zero-copy shared memory**: channels and groups live in one shared region;
-  messages under `inline_size` are written directly into ring slots (no
-  allocation, no serialization hop).
-- **Lock-free hot path**: Vyukov bounded MPMC ring buffer implemented in Rust
-  for `send`/`receive`, with per-slot sequence numbers.
-- **Crash recovery**: every slot tracks its owner (`pid` + process start
-  time). Dead owners are detected and their rings/slots are safely reclaimed —
-  a worker that dies mid-message never blocks the others.
-- **Event-driven wakeup**: `eventfd` for intra-process and `AF_UNIX` datagram
-  sockets for cross-process notification. No polling, no busy-wait.
-- **Complete channels API**: `send` / `receive` / `new_channel` /
-  `group_add` / `group_discard` / `group_send` / `flush`, process-specific
-  channels (`!`-suffix), per-channel capacity overrides and message expiry.
-- **Observable in dev, fast in prod**: watchdog, structured logs and metrics in
-  debug builds; `python -O` strips them completely.
-- **Tested hard**: unit, Hypothesis property, stateful machine, concurrency,
-  cross-process, and Docker e2e suites (see [Testing](#testing)).
+- **Zero-copy shared memory**: channels and groups live in one shared region; messages under `inline_size` are written directly into ring slots (no allocation, no serialization hop).
+- **Lock-free hot path**: Vyukov bounded MPMC ring buffer implemented in Rust for `send`/`receive`, with per-slot sequence numbers.
+- **Crash recovery**: every slot tracks its owner (`pid` + process start time). Dead owners are detected and their rings/slots are safely reclaimed — a worker that dies mid-message never blocks the others.
+- **Event-driven wakeup**: `eventfd` for intra-process and `AF_UNIX` datagram sockets for cross-process notification. No polling, no busy-wait.
+- **Complete channels API**: `send` / `receive` / `new_channel` / `group_add` / `group_discard` / `group_send` / `flush`, process-specific channels (`!`-suffix), per-channel capacity overrides and message expiry.
+- **Observable in dev, fast in prod**: watchdog, structured logs and metrics in debug builds; `python -O` strips them completely.
+- **Tested hard**: unit, Hypothesis property, stateful machine, concurrency, cross-process, and Docker e2e suites (see [Testing](#testing)).
 
 ## Requirements
 
@@ -45,8 +34,7 @@ ASGI worker A ──send──► ┌──────────────�
 
 ## Installation
 
-Not published to PyPI yet; install from GitHub (a Rust toolchain is required —
-maturin builds the `abi3` wheel during install):
+Not published to PyPI yet; install from GitHub (a Rust toolchain is required — maturin builds the `abi3` wheel during install):
 
 ```bash
 pip install git+https://github.com/jukanntenn/django-channels-shm.git
@@ -76,9 +64,7 @@ CHANNEL_LAYERS = {
 }
 ```
 
-All ASGI workers on the same machine share one region: instantiate the layer
-with the same `prefix` (default `"channels_shm"`). No server to start — the
-region and wakeup sockets are created lazily in `/dev/shm`.
+All ASGI workers on the same machine share one region: instantiate the layer with the same `prefix` (default `"channels_shm"`). No server to start — the region and wakeup sockets are created lazily in `/dev/shm`.
 
 ### Configuration
 
@@ -100,10 +86,7 @@ region and wakeup sockets are created lazily in `/dev/shm`.
 
 ## Benchmarks
 
-Published numbers are generated inside a Docker container pinned to
-**2 CPUs / 2 GB RAM** (`bench/docker/docker-compose.yml`) — the same container
-runs all three channel layers, with a local `redis-server` for the
-`channels_redis` baseline. Release mode (`python -O`).
+Published numbers are generated inside a Docker container pinned to **2 CPUs / 2 GB RAM** (`bench/docker/docker-compose.yml`) — the same container runs all three channel layers, with a local `redis-server` for the `channels_redis` baseline. Release mode (`python -O`).
 
 | Scenario (2 CPUs / 2 GB, 50 B message) | InMemory | channels-shm | channels_redis |
 |----------------------------------------|---------:|-------------:|---------------:|
@@ -113,8 +96,7 @@ runs all three channel layers, with a local `redis-server` for the
 
 - **~62×** higher cross-process send throughput than `channels_redis`
 - **~13×** higher group fan-out throughput than `channels_redis`
-- Single-process roundtrip is within ~1.8× of the pure in-memory layer — the
-  cost of being able to share messages between *processes*.
+- Single-process roundtrip is within ~1.8× of the pure in-memory layer — the cost of being able to share messages between *processes*.
 
 Latency detail (median of 7 runs):
 
@@ -125,10 +107,7 @@ Latency detail (median of 7 runs):
 | Roundtrip (single process) | InMemory | 8.3 µs / 31 µs | — |
 | Roundtrip (single process) | channels-shm | 14.4 µs / 56 µs | — |
 
-> `recv` latency under this harness includes queueing delay: the sender blasts
-> `count` messages without backpressure, so the receiver drains a backlog.
-> Send-side numbers are the clean comparison; full per-run JSON is committed
-> in `bench/docker/results/`.
+> `recv` latency under this harness includes queueing delay: the sender blasts `count` messages without backpressure, so the receiver drains a backlog. Send-side numbers are the clean comparison; full per-run JSON is committed in `bench/docker/results/`.
 
 ### Reproduce
 
@@ -140,11 +119,7 @@ docker compose run --rm bench        # prints the full JSON summary
 
 ## Example app
 
-[`examples/chat`](examples/chat/) is a WeChat-style multi-process Django +
-Channels chat with **zero infrastructure** — no Redis, no database. It doubles
-as the pre-release acceptance project: `uv sync` there builds channels-shm from
-the working tree through maturin, and `manage.py demo_broadcast` asserts
-cross-process fan-out headlessly.
+[`examples/chat`](examples/chat/) is a WeChat-style multi-process Django + Channels chat with **zero infrastructure** — no Redis, no database. It doubles as the pre-release acceptance project: `uv sync` there builds channels-shm from the working tree through maturin, and `manage.py demo_broadcast` asserts cross-process fan-out headlessly.
 
 ```bash
 cd examples/chat
@@ -153,11 +128,7 @@ uv run uvicorn chat.asgi:application --workers 3 --port 8000
 uv run python manage.py demo_broadcast    # headless acceptance: must print PASSED
 ```
 
-Open <http://127.0.0.1:8000/> in several tabs, pick nicknames, and chat —
-private chats by nickname, group chats by group name (max 500 members). All
-tabs hit the same port; the kernel spreads connections over the worker
-processes, and every message crosses them via `/dev/shm` (hover a message to
-see which worker PID delivered it).
+Open <http://127.0.0.1:8000/> in several tabs, pick nicknames, and chat — private chats by nickname, group chats by group name (max 500 members). All tabs hit the same port; the kernel spreads connections over the worker processes, and every message crosses them via `/dev/shm` (hover a message to see which worker PID delivered it).
 
 ## Testing
 
@@ -185,8 +156,7 @@ docker compose run --rm runner pytest tests/e2e/ -v
 | Pre-commit | `prek run --all-files` |
 | Rust format / lint / test | `cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test` |
 
-CI (`.github/workflows/ci.yml`) runs all of the above plus the Docker e2e and
-maturin wheel builds on Python 3.11–3.13.
+CI (`.github/workflows/ci.yml`) runs all of the above plus the Docker e2e and maturin wheel builds on Python 3.11–3.13.
 
 ## License
 

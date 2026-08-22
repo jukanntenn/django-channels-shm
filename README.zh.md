@@ -1,38 +1,29 @@
 # channels-shm
 
+[English](README.md) | 中文
+
 [![CI](https://github.com/jukanntenn/django-channels-shm/actions/workflows/ci.yml/badge.svg)](https://github.com/jukanntenn/django-channels-shm/actions/workflows/ci.yml)
 
-一个面向 **Django Channels** 的高性能 **共享内存信道层（channel layer）**，
-专为单机多进程部署设计。消息通过 `/dev/shm` 中的 `mmap(MAP_SHARED)` 区域在
-ASGI worker 之间传递 —— 无需 Redis、无需 TCP、无需 broker —— 热路径运行在
-**Rust 原生扩展（PyO3）** 中。
+一个面向 **Django Channels** 的高性能 **共享内存信道层（channel layer）**，专为单机多进程部署设计。消息通过 `/dev/shm` 中的 `mmap(MAP_SHARED)` 区域在 ASGI worker 之间传递 —— 无需 Redis、无需 TCP、无需 broker —— 热路径运行在 **Rust 原生扩展（PyO3）** 中。
 
 ```
 ASGI worker A ──send──► ┌───────────────────────────────┐ ──receive──► ASGI worker B
                         │  /dev/shm (MAP_SHARED)        │
-                        │  无锁 MPMC ring + slab 分配器  │
-                        │  channel/group 索引            │
-                        │  eventfd / AF_UNIX 唤醒        │
+                        │  lock-free MPMC rings + slab  │
+                        │  channel/group indexes        │
+                        │  eventfd / AF_UNIX wakeup     │
                         └───────────────────────────────┘
 ```
 
 ## 特性
 
-- **零拷贝共享内存**：channel 与 group 全部存于同一共享区域；不超过
-  `inline_size` 的消息直接写入 ring 槽位（无分配、无序列化中转）。
-- **无锁热路径**：`send`/`receive` 使用 Rust 实现的 Vyukov 有界 MPMC ring，
-  每个槽位带独立序号。
-- **崩溃恢复**：每个槽位记录 owner（`pid` + 进程启动时间）。检测到 owner
-  已死即安全回收其 ring/槽位 —— 某个 worker 崩溃不会阻塞其他 worker。
-- **事件驱动唤醒**：进程内用 `eventfd`，跨进程用 `AF_UNIX` 数据报 socket。
-  无轮询、无忙等。
-- **完整 channels API**：`send` / `receive` / `new_channel` /
-  `group_add` / `group_discard` / `group_send` / `flush`，进程专属通道
-  （`!` 后缀）、按通道容量覆盖与消息过期。
-- **开发可观测，生产高性能**：debug 构建带 watchdog、结构化日志与指标；
-  `python -O` 运行时完全剥离。
-- **测试充分**：单元、Hypothesis 属性、状态机、并发、跨进程、Docker e2e
-  全套测试（见[测试](#测试)）。
+- **零拷贝共享内存**：channel 与 group 全部存于同一共享区域；不超过 `inline_size` 的消息直接写入 ring 槽位（无分配、无序列化中转）。
+- **无锁热路径**：`send`/`receive` 使用 Rust 实现的 Vyukov 有界 MPMC ring，每个槽位带独立序号。
+- **崩溃恢复**：每个槽位记录 owner（`pid` + 进程启动时间）。检测到 owner 已死即安全回收其 ring/槽位 —— 某个 worker 崩溃不会阻塞其他 worker。
+- **事件驱动唤醒**：进程内用 `eventfd`，跨进程用 `AF_UNIX` 数据报 socket。无轮询、无忙等。
+- **完整 channels API**：`send` / `receive` / `new_channel` / `group_add` / `group_discard` / `group_send` / `flush`，进程专属通道（`!` 后缀）、按通道容量覆盖与消息过期。
+- **开发可观测，生产高性能**：debug 构建带 watchdog、结构化日志与指标；`python -O` 运行时完全剥离。
+- **测试充分**：单元、Hypothesis 属性、状态机、并发、跨进程、Docker e2e 全套测试（见[测试](#测试)）。
 
 ## 环境要求
 
@@ -43,8 +34,7 @@ ASGI worker A ──send──► ┌──────────────�
 
 ## 安装
 
-尚未发布到 PyPI，可从 GitHub 安装（需要 Rust 工具链，maturin 会在安装时
-构建 abi3 wheel）：
+尚未发布到 PyPI，可从 GitHub 安装（需要 Rust 工具链，maturin 会在安装时构建 abi3 wheel）：
 
 ```bash
 pip install git+https://github.com/jukanntenn/django-channels-shm.git
@@ -54,7 +44,7 @@ pip install git+https://github.com/jukanntenn/django-channels-shm.git
 
 ```bash
 uv sync
-uvx maturin develop --skip-install   # 构建 _native.abi3.so 到 src/
+uvx maturin develop --skip-install   # builds _native.abi3.so into src/
 ```
 
 构建原生模块后，测试与类型检查才能运行。
@@ -74,9 +64,7 @@ CHANNEL_LAYERS = {
 }
 ```
 
-同机所有 ASGI worker 共享同一区域：使用相同 `prefix`（默认
-`"channels_shm"`）实例化即可。无需启动任何服务 —— 共享区域与唤醒 socket
-会在 `/dev/shm` 中按需创建。
+同机所有 ASGI worker 共享同一区域：使用相同 `prefix`（默认 `"channels_shm"`）实例化即可。无需启动任何服务 —— 共享区域与唤醒 socket 会在 `/dev/shm` 中按需创建。
 
 ### 配置项
 
@@ -98,10 +86,7 @@ CHANNEL_LAYERS = {
 
 ## 性能基准
 
-以下数字在 **2 核 CPU / 2 GB 内存** 的 Docker 容器中测得
-（`bench/docker/docker-compose.yml`），同一容器内跑完三套信道层，
-`channels_redis` 基线使用容器内的本地 `redis-server`。发布模式
-（`python -O`）。
+以下数字在 **2 核 CPU / 2 GB 内存** 的 Docker 容器中测得（`bench/docker/docker-compose.yml`），同一容器内跑完三套信道层，`channels_redis` 基线使用容器内的本地 `redis-server`。发布模式（`python -O`）。
 
 | 场景（2 核 / 2 GB，50 B 消息） | InMemory | channels-shm | channels_redis |
 |--------------------------------|---------:|-------------:|---------------:|
@@ -111,7 +96,7 @@ CHANNEL_LAYERS = {
 
 - 跨进程发送吞吐约为 `channels_redis` 的 **62×**
 - 组广播吞吐约为 `channels_redis` 的 **13×**
-- 单进程往返延迟仅为纯内存层的 ~1.8× —— 这是"能在进程间共享消息"的代价。
+- 单进程往返延迟仅为纯内存层的 ~1.8× —— 这是“能在进程间共享消息”的代价。
 
 延迟明细（7 次运行中位数）：
 
@@ -122,45 +107,39 @@ CHANNEL_LAYERS = {
 | 往返（单进程） | InMemory | 8.3 µs / 31 µs | — |
 | 往返（单进程） | channels-shm | 14.4 µs / 56 µs | — |
 
-> 该测试方法下 `recv` 延迟包含排队时间：发送方无背压地连发 `count` 条
-> 消息，接收方需要消化积压。send 侧指标是干净的对比；完整逐次运行数据
-> 已提交在 `bench/docker/results/`。
+> 该测试方法下 `recv` 延迟包含排队时间：发送方无背压地连发 `count` 条消息，接收方需要消化积压。send 侧指标是干净的对比；完整逐次运行数据已提交在 `bench/docker/results/`。
 
 ### 复现
 
 ```bash
 cd bench/docker
 docker compose build
-docker compose run --rm bench        # 输出完整 JSON 汇总
+docker compose run --rm bench        # prints the full JSON summary
 ```
 
 ## 示例应用
 
-[`examples/chat`](examples/chat/) 是一个多进程 Django + Channels 聊天室，
-**零基础设施** —— 无需 Redis、无需数据库。它同时是发布前验收项目：在该目录
-`uv sync` 会通过 maturin 从工作树真实构建 channels-shm，`manage.py
-demo_broadcast` 以无头方式断言跨进程消息分发。
+[`examples/chat`](examples/chat/) 是一个微信风格的多进程 Django + Channels 聊天室，**零基础设施** —— 无需 Redis、无需数据库。它同时是发布前验收项目：在该目录 `uv sync` 会通过 maturin 从工作树真实构建 channels-shm，`manage.py demo_broadcast` 以无头方式断言跨进程消息分发。
 
 ```bash
 cd examples/chat
-uv sync
-uv run python manage.py run_workers      # 在连续端口启动 N 个 daphne worker
-uv run python manage.py demo_broadcast   # 无头验收：必须输出 PASSED
+uv sync                                   # builds channels-shm from ../.. via maturin
+uv run uvicorn chat.asgi:application --workers 3 --port 8000
+uv run python manage.py demo_broadcast    # headless acceptance: must print PASSED
 ```
 
-在浏览器打开两个 worker 端口：每条聊天记录都标注了处理它的 worker PID ——
-消息经 `/dev/shm` 跨进程流转。
+在浏览器多个标签页打开 <http://127.0.0.1:8000/>，选昵称开聊 —— 按昵称私聊、按群名群聊（每群上限 500 人）。所有标签页访问同一端口；内核把连接分摊到各 worker 进程，每条消息都经 `/dev/shm` 跨进程流转（悬停消息可见是由哪个 worker PID 投递的）。
 
 ## 测试
 
 ```bash
-# 快速单元 / 属性 / 并发套件（无需 docker）
+# fast unit / property / concurrency suite (no docker)
 uv run pytest -m "not slow and not e2e"
 
-# 跨进程集成（Linux，multiprocessing）
+# cross-process integration (Linux, multiprocessing)
 uv run pytest -m slow
 
-# Django/channels 全栈 e2e —— docker compose 起 3 个 ASGI worker
+# Django/channels stack e2e — 3 ASGI workers via docker compose
 cd tests/e2e
 docker compose build
 docker compose up -d worker1 worker2 worker3
@@ -177,8 +156,7 @@ docker compose run --rm runner pytest tests/e2e/ -v
 | Pre-commit | `prek run --all-files` |
 | Rust 格式化 / Lint / 测试 | `cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test` |
 
-CI（`.github/workflows/ci.yml`）在 Python 3.11–3.13 上运行上述全部检查，
-外加 Docker e2e 与 maturin wheel 构建。
+CI（`.github/workflows/ci.yml`）在 Python 3.11–3.13 上运行上述全部检查，外加 Docker e2e 与 maturin wheel 构建。
 
 ## License
 

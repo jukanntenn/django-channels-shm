@@ -1,0 +1,12 @@
+{
+  "excluded": {
+    "AGENTS.md": "root agent instructions",
+    "CLAUDE.md": "byte-identical mirror of the root AGENTS.md",
+    ".agents/skills/": "agent workflows (tool-neutral home, byte-mirrored to .claude/skills/)",
+    ".claude/skills/": "byte copy of .agents/skills/",
+    "CHANGELOG.md": "ledger — narrates history by design",
+    "examples/chat/": "standalone uv project with its own docs",
+    ".zcode/": "session-harness internal files"
+  },
+  "cjk_allowed": {}
+}

@@ -74,6 +74,11 @@ repo = "local"
 hooks = [
   { id = "ruff-format", name = "ruff format", entry = "uv run ruff format --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true, groups = ["format"] },
   { id = "ruff-check", name = "ruff check", entry = "uv run ruff check --fix --exit-non-zero-on-fix --force-exclude", language = "system", types_or = ["python", "pyi"], require_serial = true, groups = ["lint"] },
+  # Documentation gates (scripts/doc_sync.py runs every verify_* gate in
+  # sequence; staged Markdown only — prek stashes unstaged changes during
+  # hook runs, so a wider scan would see a stale tree. CI's
+  # `prek run --all-files` owns the full-corpus truth).
+  { id = "doc-check", name = "doc_sync (documentation gates)", entry = "uv run python scripts/doc_sync.py", language = "system", types = ["markdown"], require_serial = true, groups = ["lint"] },
   { id = "agents-md-sync", name = "AGENTS.md == CLAUDE.md sync", entry = "uv run python scripts/check_agents.py", language = "system", files = "^(AGENTS|CLAUDE)\\.md$", pass_filenames = false, groups = ["lint"] },
   # pyproject [project].version is the release single source of truth (maturin
   # stamps it into every artifact; release tags must match it as v<version>).

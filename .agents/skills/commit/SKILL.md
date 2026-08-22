@@ -17,6 +17,6 @@ Group by logical change, not by file. Draft a plan, confirm, then execute. Never
 Message: `<type>(<scope>): <desc>` — lowercase, imperative, no trailing period. Types: `feat`/`fix`/`test`/`docs`/`refactor`/`chore`/`ci`/`build`/`style`/`perf`/`revert`. Scopes: `layer`/`channel`/`group`/`shm`/`serializer`/`pump` (Python), `native`/`ring`/`slab` (Rust), `chat`/`ci`/`release` (omit for cross-cutting). Match the change's language.
 
 - Generated files (`uv.lock`, `examples/chat/uv.lock`, `Cargo.lock`, `.basedpyright-baseline.json`) bundle into the producing commit, or as a standalone `chore` — regenerate via `uv lock` / `uv run basedpyright --writebaseline --baselinefile .basedpyright-baseline.json`, never hand-edit.
-- `AGENTS.md` and `CLAUDE.md` stay in sync in one commit (prek gate); same for `README.md` + `README.zh-CN.md`.
+- `AGENTS.md` and `CLAUDE.md` stay in sync in one commit (prek gate); same for `README.md` + `README.zh.md`.
 - Rust `py_bindings` changes pair with `_native.pyi` and the Python call sites; migration-free ABI changes to `layout.rs` need ask-first per AGENTS.md.
 - Never silently include unrecognized files. Never amend, never push, never placeholder messages (wip, update files).

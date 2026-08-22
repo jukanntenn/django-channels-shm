@@ -7,7 +7,7 @@
 #   - InMemoryChannelLayer  (single-process roundtrip ceiling)
 #   - channels_shm          (cross-process send/recv + group fanout)
 #   - channels_redis        (same scenarios via a local redis-server)
-# and prints a JSON summary that is copied into README.md / README.zh-CN.md.
+# and prints a JSON summary that is copied into README.md / README.zh.md.
 services:
   bench:
     build:

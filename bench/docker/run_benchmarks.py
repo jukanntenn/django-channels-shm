@@ -10,7 +10,7 @@ bench/docker/docker-compose.yml). Orchestrates:
   4. channels_redis cross-process send/recv and group fanout (local redis-server)
 
 Prints a JSON summary; the numbers are copied into README.md and
-README.zh-CN.md (run with `python -O` so the release-mode layer is measured).
+README.zh.md (run with `python -O` so the release-mode layer is measured).
 """
 
 from __future__ import annotations
