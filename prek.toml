@@ -79,7 +79,11 @@ hooks = [
   # hook runs, so a wider scan would see a stale tree. CI's
   # `prek run --all-files` owns the full-corpus truth).
   { id = "doc-check", name = "doc_sync (documentation gates)", entry = "uv run python scripts/doc_sync.py", language = "system", types = ["markdown"], require_serial = true, groups = ["lint"] },
-  { id = "agents-md-sync", name = "AGENTS.md == CLAUDE.md sync", entry = "uv run python scripts/check_agents.py", language = "system", files = "^(AGENTS|CLAUDE)\\.md$", pass_filenames = false, groups = ["lint"] },
+  # Agent-instruction mirrors (scripts/agentlib.py): direction-free
+  # HEAD-based detection; a single-sided edit self-heals and stages the
+  # twin, a true conflict fails naming both sides.
+  { id = "agent-instructions-sync", name = "AGENTS<->CLAUDE mirror sync", entry = "uv run python scripts/check_agent_instructions.py", language = "system", files = "^(AGENTS|CLAUDE)\\.md$|^crates/_channels_shm_native/(AGENTS|CLAUDE)\\.md$|^examples/chat/(AGENTS|CLAUDE)\\.md$", pass_filenames = false, groups = ["format"] },
+  { id = "skills-sync", name = "skills mirror sync (.agents <-> .claude)", entry = "uv run python scripts/check_agent_instructions.py", language = "system", files = "^\\.(agents|claude)/skills/", pass_filenames = false, groups = ["format"] },
   # pyproject [project].version is the release single source of truth (maturin
   # stamps it into every artifact; release tags must match it as v<version>).
   { id = "version-pep440", name = "pyproject version is valid PEP 440", entry = "uv run python scripts/check_version.py", language = "system", files = "^pyproject\\.toml$|^scripts/check_version\\.py$", pass_filenames = false, groups = ["check"] },

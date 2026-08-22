@@ -4,7 +4,7 @@ description: Iterate the user's input into a delivered artifact — explore the 
 argument-hint: "Requirements or design points to discuss"
 ---
 
-The operational form of the project's PRINCIPLES — ground every conclusion in fact, defer to community convention, design from first principles, fix the root cause; read PRINCIPLES.md for the values, what follows is the how.
+The operational form of the project's PRINCIPLES — ground every conclusion in fact, defer to community convention, design from first principles, fix the root cause; read [PRINCIPLES.md](../../../PRINCIPLES.md) for the values, what follows is the how.
 
 The user's input — the request that triggered this skill, or the text passed with it — is the work to move through.
 
@@ -14,7 +14,7 @@ The user's input — the request that triggered this skill, or the text passed w
 
 **Discuss** one theme at a time. Before raising any question on a theme, report the relevant code's current state; brainstorm options from first principles — shedding legacy and redesigning from zero when the root fix requires it; then decide the best option yourself when you can, and put it to the user (AskUserQuestion) only when you cannot. **Confirm** before moving on: advance to the next theme only after the user explicitly confirms this one, and stay on the current theme until then.
 
-**Land** only after the user has confirmed every theme: produce what was agreed — a spec, the implementation, or both. Discussion and production are separate phases; don't produce theme-by-theme as each settles. If the output is a spec, state the terminal design — no "was X, now Y" evolutionary prose.
+**Land** only after the user has confirmed every theme: produce what was agreed — a spec, the implementation, or both. Discussion and production are separate phases; don't produce theme-by-theme as each settles. If the output is a spec, state the terminal design — no "was X, now Y" evolutionary prose. A decision-bearing result lands as a DCS-RFC pair under `.agents/dcs-rfcs/` ([contract](../../dcs-rfcs/README.md); the `writing-rfcs` skill owns the workflow), and documentation follows [docs/AGENTS.md](../../../docs/AGENTS.md).
 
 ## Variants
 

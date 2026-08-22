@@ -2,6 +2,12 @@
   "excluded": {
     "AGENTS.md": "root agent instructions",
     "CLAUDE.md": "byte-identical mirror of the root AGENTS.md",
+    "crates/_channels_shm_native/AGENTS.md": "subtree agent instructions",
+    "crates/_channels_shm_native/CLAUDE.md": "byte-identical mirror of the crate AGENTS.md",
+    "examples/chat/AGENTS.md": "subtree agent instructions",
+    "examples/chat/CLAUDE.md": "byte-identical mirror of the chat AGENTS.md",
+    "docs/AGENTS.md": "the documentation standard itself, agent-loaded",
+    ".agents/dcs-rfcs/AGENTS.md": "dcs-rfcs tree standing orders",
     ".agents/skills/": "agent workflows (tool-neutral home, byte-mirrored to .claude/skills/)",
     ".claude/skills/": "byte copy of .agents/skills/",
     "CHANGELOG.md": "ledger — narrates history by design",
