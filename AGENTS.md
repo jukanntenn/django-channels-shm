@@ -4,6 +4,12 @@ A high-performance shared-memory channel layer for Django Channels, designed for
 single-machine multi-process deployments. Rust native extension (`pyo3`) for the
 hot path + Python for the async API. Linux-only (`MAP_SHARED` + `AF_UNIX`).
 
+Design and behavior principles — ground every conclusion in fact, defer to
+community convention, design from first principles, fix root causes, single
+source of truth, graceful degradation — live in
+[`PRINCIPLES.md`](PRINCIPLES.md). Reach for them when making design or
+convention decisions.
+
 ## Project layout
 
 - `src/channels_shm/`        Python package: `layer` (public API), `channel/`, `group/`, `shm/`, `serializer`, `pump`
@@ -171,6 +177,7 @@ fails only on NEW errors. Refresh it after intentional error changes:
 
 ## Further reading
 
+- `PRINCIPLES.md` — the coding principles (behavioral constraints)
 - `prek.toml` + `crates/_channels_shm_native/prek.toml` + `examples/chat/prek.toml` — the quality gates (authoritative)
 - `.github/workflows/ci.yml` / `release.yml`  CI + release definitions
 - `examples/chat/README.md` — demo & acceptance instructions
