@@ -2,10 +2,16 @@
  *
  * Owns: WebSocket protocol, conversation list, chat rendering, presence
  * roster (self-healing via periodic census), unread badges, reconnect.
- * All user-derived text goes through textContent — never innerHTML. */
+ * All user-derived text goes through textContent — never innerHTML.
+ * i18n: static strings live in data-i18n* attributes and are applied by
+ * i18n.js; every dynamic string goes through t() here, and the
+ * "shm:langchange" event (fired by i18n.js) re-renders them. */
 "use strict";
 
 (() => {
+  const { t, has } = window.SHMI18N;
+  const lang = () => window.SHMI18N.lang;
+
   // ── 小工具 ──────────────────────────────────────────────
   const $ = (id) => document.getElementById(id);
 
@@ -73,9 +79,15 @@
     const yest = new Date(now);
     yest.setDate(now.getDate() - 1);
     if (day(d) === day(now)) return clock;
-    if (day(d) === day(yest)) return `昨天 ${clock}`;
-    if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
-    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
+    if (day(d) === day(yest)) return `${t("yesterday")} ${clock}`;
+    const en = lang() === "en";
+    const md = en
+      ? `${d.getMonth() + 1}/${d.getDate()}`
+      : `${d.getMonth() + 1}月${d.getDate()}日`;
+    if (d.getFullYear() === now.getFullYear()) return `${md} ${clock}`;
+    return en
+      ? `${d.getFullYear()}/${md} ${clock}`
+      : `${d.getFullYear()}年${md} ${clock}`;
   };
 
   // ── 状态 ────────────────────────────────────────────────
@@ -88,6 +100,10 @@
     ws: null,
     wsReady: false,
     rejoinNeeded: false, // 重连后需重新认领昵称
+    // i18n: last-applied stateful texts, re-applied on language switch.
+    net: { cls: "on", key: "net_connected", vars: {} },
+    loginFoot: { key: "connecting", vars: {} },
+    loginBusy: false,
   };
 
   const convKey = (kind, name) => `${kind}:${name}`;
@@ -112,6 +128,10 @@
 
   const activeConv = () => (state.active ? state.convs.get(state.active) : null);
 
+  // System messages are stored as dictionary keys + params so a language
+  // switch re-renders history; plain chat text is stored verbatim.
+  const msgText = (msg) => (msg.kind === "sys" ? t(msg.key, msg.vars) : msg.text);
+
   // ── WebSocket ───────────────────────────────────────────
   let retryDelay = 1000;
 
@@ -127,12 +147,12 @@
     ws.onopen = () => {
       state.wsReady = true;
       retryDelay = 1000;
-      updateLoginFoot("服务已连接,输入昵称进入");
+      updateLoginFoot("foot_ready");
       $("login-btn").disabled = !$("login-nick").value.trim();
-      setNet("on", state.me ? "已连接" : "已连接");
+      setNet("on", "net_connected");
       if (state.rejoinNeeded && state.me) {
         // 重连:先重新认领昵称,成功后由 welcome 处理器重建会话与群
-        updateLoginFoot("正在恢复会话…");
+        updateLoginFoot("foot_recovering");
         wsSend({ type: "hello", nickname: state.me });
       }
     };
@@ -150,8 +170,8 @@
     ws.onclose = () => {
       state.wsReady = false;
       state.rejoinNeeded = !!state.me;
-      setNet(state.me ? "off" : "wait", "重连中…");
-      if (state.me) toast("连接已断开,正在重连…");
+      setNet(state.me ? "off" : "wait", "net_reconnecting");
+      if (state.me) toast(t("toast_reconnecting"));
       setTimeout(connect, retryDelay);
       retryDelay = Math.min(retryDelay * 2, 8000);
     };
@@ -168,8 +188,8 @@
       case "pm": onPm(m); break;
       case "gm": onGm(m); break;
       case "pm_delivered": {
-        const t = pendingAcks.get(m.msg_id);
-        if (t) { clearTimeout(t); pendingAcks.delete(m.msg_id); }
+        const timer = pendingAcks.get(m.msg_id);
+        if (timer) { clearTimeout(timer); pendingAcks.delete(m.msg_id); }
         setMsgStatus(m.msg_id, "ok");
         break;
       }
@@ -184,6 +204,13 @@
     }
   }
 
+  /** Server errors arrive with a machine-readable code (+ params); the
+      dictionary localizes them, the Chinese message is the fallback. */
+  const serverErrorText = (m) => {
+    const key = `err.${m.code}`;
+    return m.code && has(key) ? t(key, m.params || {}) : m.message;
+  };
+
   function onWelcome(m) {
     state.rejoinNeeded = false;
     state.mePid = m.worker_pid;
@@ -194,36 +221,37 @@
       replaceAvatar($("me-avatar"), userAvatar(state.me));
       $("login").classList.add("hidden");
       $("main").hidden = false;
-      updateLoginFoot(`worker pid ${m.worker_pid} · channels-shm`);
+      updateLoginFoot("foot_worker", { pid: m.worker_pid });
     } else {
       // 重连成功:重建在线名单,重新加入所有群
       state.online.clear();
       for (const conv of state.convs.values()) {
         if (conv.kind === "g" && !conv.left) wsSend({ type: "join_group", group: conv.name });
       }
-      toast("已重新连接");
+      toast(t("toast_rejoined"));
     }
     $("pid-tag").textContent = `pid ${m.worker_pid}`;
-    setNet("on", "已连接");
+    setNet("on", "net_connected");
     sendCensus();
   }
 
   function onNickTaken(m) {
     if (!state.me) {
-      showLoginError(`昵称「${m.nickname}」已被占用,换一个吧`);
+      showLoginError(t("nickname_taken", { nick: m.nickname }));
       setLoginBusy(false);
     } else {
       // 极少见:重连时昵称被别人抢走 —— 回到登录页重新开始
-      resetToLogin("连接恢复失败:昵称已被占用,请重新进入");
+      resetToLogin(t("reset_nick_taken"));
     }
   }
 
   function onError(m) {
+    const text = serverErrorText(m);
     if (!state.me) {
-      showLoginError(m.message);
+      showLoginError(text);
       setLoginBusy(false);
     } else {
-      toast(m.message);
+      toast(text);
     }
   }
 
@@ -286,7 +314,7 @@ function onJoinedGroup(name) {
   conv.everJoined = true;
   conv.left = false;
   if (firstJoin) {
-    appendMessage(conv, { id: uid(), kind: "sys", text: "你已加入群聊", ts: Date.now() / 1000 });
+    appendMessage(conv, { id: uid(), kind: "sys", key: "sys_you_joined", ts: Date.now() / 1000 });
     openConv(conv.key);
   } else if (conv.key === state.active) {
     // 重连后重新加入:刷新头部与成员面板即可,不追加系统消息
@@ -301,7 +329,7 @@ function onJoinedGroup(name) {
     if (!conv) return;
     conv.left = true;
     conv.roster.clear();
-    appendMessage(conv, { id: uid(), kind: "sys", text: "你已退出群聊", ts: Date.now() / 1000 });
+    appendMessage(conv, { id: uid(), kind: "sys", key: "sys_you_left", ts: Date.now() / 1000 });
     if (conv.key === state.active) { renderChatHead(); renderComposerState(); }
   }
 
@@ -310,11 +338,11 @@ function onJoinedGroup(name) {
     if (!conv || nick === state.me) return;
     if (action === "left") {
       conv.roster.delete(nick);
-      appendMessage(conv, { id: uid(), kind: "sys", text: `${nick} 退出了群聊`, ts: Date.now() / 1000 });
+      appendMessage(conv, { id: uid(), kind: "sys", key: "sys_member_left", vars: { nick }, ts: Date.now() / 1000 });
     } else {
       conv.roster.set(nick, Date.now());
       if (action === "joined") {
-        appendMessage(conv, { id: uid(), kind: "sys", text: `${nick} 加入了群聊`, ts: Date.now() / 1000 });
+        appendMessage(conv, { id: uid(), kind: "sys", key: "sys_member_joined", vars: { nick }, ts: Date.now() / 1000 });
       }
     }
     if (conv.key === state.active) { renderChatHead(); renderMembers(); }
@@ -355,7 +383,7 @@ function onJoinedGroup(name) {
     box.textContent = "";
     if (status === "pending") box.appendChild(el("span", { class: "spinner" }));
     else if (status === "fail") {
-      box.appendChild(el("span", { class: "fail-mark", text: "!", title: "未送达:对方可能不在线" }));
+      box.appendChild(el("span", { class: "fail-mark", text: "!", title: t("undelivered") }));
       host.classList.add("fail");
     }
   }
@@ -391,12 +419,12 @@ function onJoinedGroup(name) {
     else if (msg.dir === "in" || msg.kind === "sys") {
       conv.newCount++;
       $("btn-jump").hidden = false;
-      $("btn-jump").textContent = `↓ ${conv.newCount} 条新消息`;
+      $("btn-jump").textContent = t("jump_new_count", { n: conv.newCount });
     }
   }
 
   function buildMsgNode(conv, msg) {
-    if (msg.kind === "sys") return el("div", { class: "sysline", text: msg.text });
+    if (msg.kind === "sys") return el("div", { class: "sysline", text: msgText(msg) });
 
     const row = el("div", { class: "msg-row" });
     row.appendChild(el("div", { class: "bubble", text: msg.text, title: msgTitle(msg) }));
@@ -404,7 +432,7 @@ function onJoinedGroup(name) {
       const status = el("div", { class: "msg-status" });
       if (msg.status === "pending") status.appendChild(el("span", { class: "spinner" }));
       if (msg.status === "fail") {
-        status.appendChild(el("span", { class: "fail-mark", text: "!", title: "未送达:对方可能不在线" }));
+        status.appendChild(el("span", { class: "fail-mark", text: "!", title: t("undelivered") }));
       }
       row.appendChild(status);
     }
@@ -423,7 +451,9 @@ function onJoinedGroup(name) {
   }
 
   const msgTitle = (msg) =>
-    msg.pid ? `${fmtDivider(msg.ts)} · 由 worker pid ${msg.pid} 转发` : fmtDivider(msg.ts);
+    msg.pid
+      ? `${fmtDivider(msg.ts)} · ${t("relayed_by", { pid: msg.pid })}`
+      : fmtDivider(msg.ts);
 
   function renderConvMessages(conv) {
     const box = $("msgs");
@@ -450,10 +480,12 @@ function onJoinedGroup(name) {
     for (const conv of convs) {
       const last = conv.msgs[conv.msgs.length - 1];
       const preview = conv.left
-        ? "[已退出]"
+        ? t("preview_left")
         : last
-          ? last.kind === "sys" ? last.text : `${last.dir === "out" ? "我: " : conv.kind === "g" ? `${last.from}: ` : ""}${last.text}`
-          : "暂无消息";
+          ? last.kind === "sys"
+            ? msgText(last)
+            : `${last.dir === "out" ? t("preview_me") : conv.kind === "g" ? `${last.from}: ` : ""}${last.text}`
+          : t("preview_empty");
       const item = el("div", {
         class: `conv${conv.key === state.active ? " active" : ""}${conv.unread ? " unread" : ""}`,
       }, [
@@ -513,7 +545,7 @@ function onJoinedGroup(name) {
       $("chat-sub").appendChild(
         el("span", {}, [
           el("span", { class: `status-dot${on ? " on" : ""}` }),
-          el("span", { text: on ? "在线" : "离线" }),
+          el("span", { text: on ? t("online") : t("offline") }),
         ])
       );
       membersBtn.hidden = true;
@@ -521,7 +553,7 @@ function onJoinedGroup(name) {
     } else {
       const count = conv.roster.size + 1;
       $("chat-title").textContent = conv.name;
-      $("chat-sub").textContent = conv.left ? "已退出" : `群聊 · ${count} 人`;
+      $("chat-sub").textContent = conv.left ? t("left_status") : t("group_sub", { count });
       membersBtn.hidden = false;
       $("members").hidden = !( $("members").dataset.open === "1" ) || conv.left;
     }
@@ -544,7 +576,7 @@ function onJoinedGroup(name) {
         el("li", { class: name === state.me ? "me-row" : "" }, [
           userAvatar(name, true),
           el("span", { class: "nick", text: name }),
-          ...(name === state.me ? [el("span", { class: "me-flag", text: "(我)" })] : []),
+          ...(name === state.me ? [el("span", { class: "me-flag", text: t("me_flag") })] : []),
         ])
       );
     }
@@ -556,7 +588,7 @@ function onJoinedGroup(name) {
     const disabled = !conv || conv.left;
     input.disabled = disabled;
     $("btn-send").disabled = disabled;
-    input.placeholder = conv && conv.left ? "已退出群聊" : "输入消息…";
+    input.placeholder = conv && conv.left ? t("composer_left") : t("input_placeholder");
   }
 
   // ── 弹窗:发起私聊 / 加入群聊 ──────────────────────────
@@ -602,7 +634,7 @@ function onJoinedGroup(name) {
   function joinGroupAction() {
     const name = $("group-name").value.trim();
     if (!name) return;
-    if (!state.wsReady) { toast("尚未连接服务器"); return; }
+    if (!state.wsReady) { toast(t("toast_not_connected")); return; }
     wsSend({ type: "join_group", group: name });
     $("group-name").value = "";
     closeModal();
@@ -627,12 +659,16 @@ function onJoinedGroup(name) {
     toastTimer = setTimeout(() => { node.hidden = true; }, 2600);
   }
 
-  function setNet(cls, text) {
+  function setNet(cls, key, vars = {}) {
+    state.net = { cls, key, vars };
     $("net-dot").className = `dot dot-${cls}`;
-    $("net-text").textContent = text;
+    $("net-text").textContent = t(key, vars);
   }
 
-  function updateLoginFoot(text) { $("login-foot").textContent = text; }
+  function updateLoginFoot(key, vars = {}) {
+    state.loginFoot = { key, vars };
+    $("login-foot").textContent = t(key, vars);
+  }
 
   function showLoginError(text) {
     const node = $("login-error");
@@ -645,8 +681,9 @@ function onJoinedGroup(name) {
   }
 
   function setLoginBusy(busy) {
+    state.loginBusy = busy;
     $("login-btn").disabled = busy || !$("login-nick").value.trim();
-    $("login-btn").textContent = busy ? "正在进入…" : "进入聊天";
+    $("login-btn").textContent = busy ? t("entering") : t("enter_chat");
   }
 
   function resetToLogin(message) {
@@ -660,7 +697,7 @@ function onJoinedGroup(name) {
     login.classList.remove("hidden");
     setLoginBusy(false);
     if (message) showLoginError(message);
-    updateLoginFoot("服务已连接,输入昵称进入");
+    updateLoginFoot("foot_ready");
     updateTitle();
   }
 
@@ -674,6 +711,27 @@ function onJoinedGroup(name) {
     const input = $("input");
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
+  }
+
+  /** Language switch (i18n.js): re-apply every stateful dynamic string —
+      including the open conversation, whose dividers and system messages
+      are keys; user-authored bubbles re-render verbatim. Transient texts
+      (toasts) stay as-is. */
+  function rerenderForLang() {
+    setLoginBusy(state.loginBusy);
+    updateLoginFoot(state.loginFoot.key, state.loginFoot.vars);
+    setNet(state.net.cls, state.net.key, state.net.vars);
+    renderConvList();
+    if (state.active) {
+      const conv = activeConv();
+      const stick = $("btn-jump").hidden || nearBottom();
+      renderChatHead();
+      renderConvMessages(conv);
+      if (stick) { conv.newCount = 0; $("btn-jump").hidden = true; }
+      renderMembers();
+      renderComposerState();
+    }
+    renderPmList();
   }
 
   // ── 事件绑定 ────────────────────────────────────────────
@@ -743,11 +801,13 @@ function onJoinedGroup(name) {
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && !$("modal").hidden) closeModal();
     });
+
+    document.addEventListener("shm:langchange", rerenderForLang);
   }
 
   // ── 启动 ────────────────────────────────────────────────
   bind();
-  updateLoginFoot("正在连接服务…");
+  updateLoginFoot("connecting");
   connect();
   setInterval(() => {
     if (state.wsReady && state.me) sendCensus();

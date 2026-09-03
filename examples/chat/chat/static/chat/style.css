@@ -1,23 +1,52 @@
 /* SHM Chat — WeChat-inspired, deliberately small.
-   Palette anchors: WeChat green #07C160, bubble #95EC69, greys from WeChat. */
+   Palette anchors: WeChat green #07C160, bubble #95EC69, greys from WeChat.
+
+   Theming: one palette, resolved per element by CSS light-dark(). The theme
+   toggle only sets [data-theme], which pins color-scheme to light/dark or
+   leaves it at `light dark` (auto) so the OS preference decides. */
 
 :root {
-  --green: #07c160;
-  --green-deep: #06ad56;
-  --bubble: #95ec69;
-  --ink: #191919;
-  --ink-2: #7f7f7f;
-  --ink-3: #b2b2b2;
-  --line: #e7e7e7;
-  --bg-side: #f7f7f7;
-  --bg-chat: #f5f5f5;
-  --item-hover: #ededed;
-  --item-active: #dcefe3;
+  color-scheme: light dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+:root {
+  --green: light-dark(#07c160, #07c160);
+  --green-deep: light-dark(#06ad56, #06ad56);
+  --bubble: light-dark(#95ec69, #95ec69);
+  --bubble-ink: #191919; /* dark text on the bright green bubble, both themes */
+  --ink: light-dark(#191919, #d6d6d6);
+  --ink-2: light-dark(#7f7f7f, #9d9d9d);
+  --ink-3: light-dark(#b2b2b2, #6f6f6f);
+  --ink-faint: light-dark(#9a9a9a, #7f7f7f);
+  --line: light-dark(#e7e7e7, #2e2e2e);
+  --line-strong: light-dark(#dcdcdc, #3d3d3d);
+  --bg-side: light-dark(#f7f7f7, #232323);
+  --bg-chat: light-dark(#f5f5f5, #191919);
+  --bg-input: light-dark(#ececec, #333333);
+  --item-hover: light-dark(#ededed, #2c2c2c);
+  --item-active: light-dark(#dcefe3, #233b2c);
+  --me-row: light-dark(#f2f8f4, #24382a);
+  --avatar-grid: light-dark(#e2e2e2, #3a3a3a);
   --badge: #fa5151;
-  --white: #fff;
+  --surface: light-dark(#fff, #2c2c2c); /* cards, panels, received bubbles */
+  --on-accent: #fff; /* text on green/red fills, both themes */
+  --hover-veil: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.08));
+  --scrim: light-dark(rgba(0, 0, 0, 0.32), rgba(0, 0, 0, 0.55));
+  --toast-bg: light-dark(rgba(0, 0, 0, 0.76), rgba(240, 240, 240, 0.92));
+  --toast-ink: light-dark(#fff, #191919);
+  --scrollbar: light-dark(rgba(0, 0, 0, 0.14), rgba(255, 255, 255, 0.2));
+  --scrollbar-hover: light-dark(rgba(0, 0, 0, 0.24), rgba(255, 255, 255, 0.32));
+  --spinner-track: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.16));
+  --login-glow: light-dark(rgba(7, 193, 96, 0.1), rgba(7, 193, 96, 0.14));
+  --focus-ring: light-dark(rgba(7, 193, 96, 0.14), rgba(7, 193, 96, 0.28));
+  --shadow-card: 0 10px 44px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.45));
+  --shadow-pop: 0 4px 16px light-dark(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.5));
+  --shadow-bubble: 0 1px 1px light-dark(rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.2));
+  --shadow-panel: -6px 0 16px light-dark(rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.3));
   --radius: 8px;
-  --shadow-card: 0 10px 44px rgba(0, 0, 0, 0.1);
-  --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.12);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 }
@@ -48,8 +77,8 @@ button { font-family: inherit; }
 
 /* ── 滚动条 ─────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.14); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.24); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ── 头像 ───────────────────────────────────────────────── */
@@ -61,7 +90,7 @@ button { font-family: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--on-accent);
   font-size: 16px;
   font-weight: 600;
   user-select: none;
@@ -74,7 +103,7 @@ button { font-family: inherit; }
   grid-template-rows: 1fr 1fr;
   gap: 2px;
   padding: 3px;
-  background: #e2e2e2;
+  background: var(--avatar-grid);
   font-size: 11px;
 }
 
@@ -97,15 +126,16 @@ button { font-family: inherit; }
   align-items: center;
   justify-content: center;
   background:
-    radial-gradient(640px 420px at 50% 26%, rgba(7, 193, 96, 0.1), transparent 70%),
+    radial-gradient(640px 420px at 50% 26%, var(--login-glow), transparent 70%),
     var(--bg-chat);
   z-index: 30;
 }
 
 .login-card {
+  position: relative;
   width: 340px;
   padding: 44px 36px 28px;
-  background: var(--white);
+  background: var(--surface);
   border-radius: 14px;
   box-shadow: var(--shadow-card);
   text-align: center;
@@ -127,6 +157,14 @@ button { font-family: inherit; }
 
 .tagline { margin: 0 0 26px; font-size: 13px; color: var(--ink-2); }
 
+.login-tools {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 2px;
+}
+
 #login-form input {
   width: 100%;
   height: 44px;
@@ -134,7 +172,7 @@ button { font-family: inherit; }
   font-size: 15px;
   font-family: inherit;
   color: var(--ink);
-  border: 1px solid #dcdcdc;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
@@ -142,7 +180,7 @@ button { font-family: inherit; }
 
 #login-form input:focus {
   border-color: var(--green);
-  box-shadow: 0 0 0 3px rgba(7, 193, 96, 0.14);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 #login-btn {
@@ -151,7 +189,7 @@ button { font-family: inherit; }
   margin-top: 16px;
   font-size: 15px;
   font-weight: 500;
-  color: var(--white);
+  color: var(--on-accent);
   background: var(--green);
   border: none;
   border-radius: var(--radius);
@@ -211,6 +249,8 @@ button { font-family: inherit; }
   text-overflow: ellipsis;
 }
 
+.side-actions { display: flex; align-items: center; gap: 2px; }
+
 .icon-btn {
   width: 30px;
   height: 30px;
@@ -227,7 +267,17 @@ button { font-family: inherit; }
   transition: background 0.12s, color 0.12s;
 }
 
-.icon-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--ink); }
+.icon-btn:hover { background: var(--hover-veil); color: var(--ink); }
+
+/* 语言切换按钮装的是文字(“EN”/“中”),不是图标。 */
+.btn-lang {
+  width: auto;
+  min-width: 30px;
+  padding: 0 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
 
 .side-search {
   display: flex;
@@ -236,13 +286,13 @@ button { font-family: inherit; }
   margin: 2px 14px 10px;
   padding: 0 10px;
   height: 30px;
-  background: #ececec;
+  background: var(--bg-input);
   border-radius: 6px;
   color: var(--ink-3);
   transition: background 0.15s;
 }
 
-.side-search:focus-within { background: var(--white); box-shadow: 0 0 0 1.5px var(--green); }
+.side-search:focus-within { background: var(--surface); box-shadow: 0 0 0 1.5px var(--green); }
 
 .side-search input {
   flex: 1;
@@ -306,7 +356,7 @@ button { font-family: inherit; }
   padding: 0 4px;
   border-radius: 8px;
   background: var(--badge);
-  color: var(--white);
+  color: var(--on-accent);
   font-size: 11px;
   line-height: 16px;
   text-align: center;
@@ -354,6 +404,9 @@ button { font-family: inherit; }
 
 .chat-empty b { color: var(--ink-2); }
 
+/* The placeholder tile follows the theme (SVG fill attribute can't). */
+.empty-tile rect { fill: var(--avatar-grid); }
+
 .chat-pane {
   flex: 1;
   display: flex;
@@ -370,7 +423,7 @@ button { font-family: inherit; }
   padding: 0 16px;
   height: 56px;
   flex: none;
-  background: var(--white);
+  background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 
@@ -417,7 +470,7 @@ button { font-family: inherit; }
   padding: 6px 14px;
   font-size: 12px;
   color: var(--ink);
-  background: var(--white);
+  background: var(--surface);
   border: none;
   border-radius: 999px;
   box-shadow: var(--shadow-pop);
@@ -431,14 +484,14 @@ button { font-family: inherit; }
   margin: 14px 0 6px;
   text-align: center;
   font-size: 12px;
-  color: #9a9a9a;
+  color: var(--ink-faint);
 }
 
 .sysline {
   margin: 8px 0;
   text-align: center;
   font-size: 12px;
-  color: #9a9a9a;
+  color: var(--ink-faint);
 }
 
 .msg {
@@ -481,12 +534,12 @@ button { font-family: inherit; }
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--white);
+  background: var(--surface);
   border-radius: var(--radius);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-bubble);
 }
 
-.msg.out .bubble { background: var(--bubble); }
+.msg.out .bubble { background: var(--bubble); color: var(--bubble-ink); }
 
 .bubble::after {
   content: "";
@@ -497,7 +550,7 @@ button { font-family: inherit; }
 
 .msg:not(.out) .bubble::after {
   left: -9px;
-  border-right-color: var(--white);
+  border-right-color: var(--surface);
 }
 
 .msg.out .bubble::after {
@@ -518,7 +571,7 @@ button { font-family: inherit; }
 .msg-status .spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(0, 0, 0, 0.12);
+  border: 2px solid var(--spinner-track);
   border-top-color: var(--green);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -531,7 +584,7 @@ button { font-family: inherit; }
   height: 17px;
   border-radius: 50%;
   background: var(--badge);
-  color: var(--white);
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 700;
   line-height: 17px;
@@ -542,7 +595,7 @@ button { font-family: inherit; }
 /* ── 输入区 ─────────────────────────────────────────────── */
 .composer {
   flex: none;
-  background: var(--white);
+  background: var(--surface);
   border-top: 1px solid var(--line);
   padding: 10px 16px 12px;
 }
@@ -578,7 +631,7 @@ button { font-family: inherit; }
   padding: 6px 20px;
   font-size: 13.5px;
   font-weight: 500;
-  color: var(--white);
+  color: var(--on-accent);
   background: var(--green);
   border: none;
   border-radius: 5px;
@@ -597,9 +650,9 @@ button { font-family: inherit; }
   bottom: 0;
   width: 208px;
   z-index: 4;
-  background: var(--white);
+  background: var(--surface);
   border-left: 1px solid var(--line);
-  box-shadow: -6px 0 16px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-panel);
   display: flex;
   flex-direction: column;
   animation: slide-in 0.18s ease;
@@ -630,7 +683,7 @@ button { font-family: inherit; }
   font-size: 13.5px;
 }
 
-.members-list li.me-row { background: #f2f8f4; }
+.members-list li.me-row { background: var(--me-row); }
 
 .members-list .nick {
   white-space: nowrap;
@@ -650,7 +703,7 @@ button { font-family: inherit; }
   justify-content: center;
 }
 
-.modal-mask { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.32); }
+.modal-mask { position: absolute; inset: 0; background: var(--scrim); }
 
 .modal-card {
   position: relative;
@@ -658,7 +711,7 @@ button { font-family: inherit; }
   max-height: 480px;
   display: flex;
   flex-direction: column;
-  background: var(--white);
+  background: var(--surface);
   border-radius: 12px;
   box-shadow: var(--shadow-card);
   overflow: hidden;
@@ -708,13 +761,13 @@ button { font-family: inherit; }
   font-size: 13px;
   font-family: inherit;
   color: var(--ink);
-  background: #f2f2f2;
+  background: var(--bg-input);
   border: none;
   border-radius: 6px;
   outline: none;
 }
 
-.modal-filter input:focus { background: var(--white); box-shadow: 0 0 0 1.5px var(--green); }
+.modal-filter input:focus { background: var(--surface); box-shadow: 0 0 0 1.5px var(--green); }
 
 .pick-list { flex: 1; overflow-y: auto; margin: 0; padding: 6px 8px 10px; list-style: none; }
 
@@ -742,12 +795,12 @@ button { font-family: inherit; }
   font-size: 13.5px;
   font-family: inherit;
   color: var(--ink);
-  border: 1px solid #dcdcdc;
+  border: 1px solid var(--line-strong);
   border-radius: 6px;
   outline: none;
 }
 
-.modal-form input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(7, 193, 96, 0.12); }
+.modal-form input:focus { border-color: var(--green); box-shadow: 0 0 0 3px var(--focus-ring); }
 
 .modal-note { padding: 4px 16px 16px; font-size: 12px; color: var(--ink-3); }
 
@@ -761,8 +814,8 @@ button { font-family: inherit; }
   max-width: 76vw;
   padding: 9px 18px;
   font-size: 13.5px;
-  color: var(--white);
-  background: rgba(0, 0, 0, 0.76);
+  color: var(--toast-ink);
+  background: var(--toast-bg);
   border-radius: 8px;
   animation: toast-in 0.2s ease;
 }

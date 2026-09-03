@@ -15,7 +15,9 @@ Protocol (client → server):
 
 Server → client: welcome / nickname_taken / error / pm / gm / pm_delivered /
 user_online / user_offline / joined_group / left_group / group_member_joined /
-group_member_left / group_member_online.
+group_member_left / group_member_online. Errors carry a machine-readable
+``code`` plus ``params`` so the client can localize them; the Chinese
+``message`` is the human-readable fallback.
 
 How the stateless parts work (standard channel-layer patterns, no storage):
 
@@ -63,30 +65,51 @@ def _layer_group(kind: str, name: str) -> str:
     return f"{kind}_{digest}"
 
 
+# Symbolic ``what`` labels (also sent to the client as error params) mapped
+# to their Chinese fallback wording.
+_WHAT_ZH = {"nick": "昵称", "peer": "对方昵称", "group": "群名称"}
+
+
+class DemoValueError(ValueError):
+    """Validation failure carrying a machine-readable code and params.
+
+    The client renders localized copy from its dictionary keyed by ``code``
+    (+ ``params``); the Chinese ``message`` is the fallback for unknown
+    codes and keeps the raw protocol human-readable.
+    """
+
+    def __init__(self, code: str, message: str, **params: object) -> None:
+        super().__init__(message)
+        self.code = code
+        self.params = params
+
+
 def _clean_name(raw: object, max_len: int, what: str) -> str:
-    """Validate a nickname / chat-group name; raises ValueError with a
-    user-facing message."""
+    """Validate a nickname / chat-group name; ``what`` is a symbolic label
+    from ``_WHAT_ZH``. Raises DemoValueError with a user-facing message."""
+    label = _WHAT_ZH[what]
     name = str(raw).strip()
     if not name:
-        msg = f"{what}不能为空"
-        raise ValueError(msg)
+        raise DemoValueError("name.empty", f"{label}不能为空", what=what)
     if len(name) > max_len:
-        msg = f"{what}不能超过 {max_len} 个字符"
-        raise ValueError(msg)
+        raise DemoValueError(
+            "name.too_long", f"{label}不能超过 {max_len} 个字符", what=what, max=max_len
+        )
     if _CONTROL_CHARS.search(name):
-        msg = f"{what}不能包含控制字符"
-        raise ValueError(msg)
+        raise DemoValueError(
+            "name.control_chars", f"{label}不能包含控制字符", what=what
+        )
     return name
 
 
 def _clean_text(raw: object) -> str:
     text = str(raw)
     if not text.strip():
-        msg = "消息不能为空"
-        raise ValueError(msg)
+        raise DemoValueError("text.empty", "消息不能为空")
     if len(text) > TEXT_MAX_LEN:
-        msg = f"消息不能超过 {TEXT_MAX_LEN} 个字符"
-        raise ValueError(msg)
+        raise DemoValueError(
+            "text.too_long", f"消息不能超过 {TEXT_MAX_LEN} 个字符", max=TEXT_MAX_LEN
+        )
     return text
 
 
@@ -153,12 +176,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 await self._refresh_rosters()
             else:
                 msg = f"未知消息类型: {kind!r}"
-                await self._error("bad_type", msg)
-        except ValueError as exc:
+                await self._error("bad_type", msg, {"kind": str(kind)})
+        except DemoValueError as exc:
+            await self._error(exc.code, str(exc), dict(exc.params))
+        except ValueError as exc:  # defensive: any future plain ValueError
             await self._error("bad_request", str(exc))
 
     async def _hello(self, raw_nick: object) -> None:
-        nick = _clean_name(raw_nick, NICK_MAX_LEN, "昵称")
+        nick = _clean_name(raw_nick, NICK_MAX_LEN, "nick")
         if self.nickname is not None:
             msg = "本连接已使用昵称,请刷新页面"
             await self._error("already_identified", msg)
@@ -204,7 +229,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         if self.nickname is None:
             await self._require_nick()
             return
-        to = _clean_name(content.get("to"), NICK_MAX_LEN, "对方昵称")
+        to = _clean_name(content.get("to"), NICK_MAX_LEN, "peer")
         text = _clean_text(content.get("text"))
         msg_id = str(content.get("msg_id", ""))[:MSG_ID_MAX_LEN]
         await self.channel_layer.group_send(
@@ -224,11 +249,11 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         if self.nickname is None:
             await self._require_nick()
             return
-        name = _clean_name(content.get("group"), GROUP_NAME_MAX_LEN, "群名称")
+        name = _clean_name(content.get("group"), GROUP_NAME_MAX_LEN, "group")
         group = self._groups.get(name)
         if group is None:
             msg = f"尚未加入群聊 {name!r},请先加入"
-            await self._error("not_in_group", msg)
+            await self._error("not_in_group", msg, {"group": name})
             return
         text = _clean_text(content.get("text"))
         await self.channel_layer.group_send(
@@ -247,7 +272,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         if self.nickname is None:
             await self._require_nick()
             return
-        name = _clean_name(raw_name, GROUP_NAME_MAX_LEN, "群名称")
+        name = _clean_name(raw_name, GROUP_NAME_MAX_LEN, "group")
         if name in self._groups:  # idempotent rejoin
             await self.send_json({"type": "joined_group", "group": name})
             return
@@ -256,7 +281,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_add(group, self.channel_name)
         except RuntimeError as exc:
             if "max_members_per_group" in str(exc):
-                await self._error("group_full", "群聊人数已满(500)")
+                await self._error("group_full", "群聊人数已满(500)", {"max": 500})
             else:
                 await self._error("join_failed", "暂时无法加入,请稍后再试")
             return
@@ -399,5 +424,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         msg = "请先设置昵称"
         await self._error("not_identified", msg)
 
-    async def _error(self, code: str, message: str) -> None:
-        await self.send_json({"type": "error", "code": code, "message": message})
+    async def _error(
+        self, code: str, message: str, params: dict[str, object] | None = None
+    ) -> None:
+        payload: dict[str, object] = {"type": "error", "code": code, "message": message}
+        if params:
+            payload["params"] = params
+        await self.send_json(payload)

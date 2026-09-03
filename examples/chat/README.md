@@ -10,6 +10,13 @@ no database, no broker at all** (`DATABASES = {}` in the settings).
 - **群聊**: join by group name; the first member creates the group. Group
   size is capped at **500** by the channel layer itself
   (`max_members_per_group`).
+- **主题**: light / dark / follow-system from the toolbar button (login card
+  and sidebar); the choice is remembered in `localStorage` and applied
+  before first paint. One palette, resolved per element by CSS
+  `light-dark()` — `data-theme` only pins `color-scheme`.
+- **语言**: 中文 / English toggle next to it. The first visit follows the
+  browser language and the choice is remembered; server error messages are
+  localized on the client from their machine-readable `code` + `params`.
 - **多进程**: one port, N uvicorn workers; connections land wherever the
   kernel sends them and every message crosses processes through the
   shared-memory layer.
