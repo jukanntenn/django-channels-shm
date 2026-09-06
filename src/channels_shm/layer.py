@@ -170,6 +170,26 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
             )
             raise ConfigurationError(msg)
 
+        # Capacity must be an integer >= 2: capacity=0 panics the ring (pos % 0),
+        # and a single-slot ring is not representable in the Vyukov seq encoding
+        # (published-unconsumed and recycled-empty both equal pos+1, so a second
+        # enqueue silently overwrites a live message with no Full signal).
+        # `capacity or default` also used to silently swap 0 for the default.
+        # The isinstance guards are runtime guards for callers the static type
+        # cannot see (mirrors send()'s message guard below).
+        if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 2:  # pyright: ignore[reportUnnecessaryIsInstance]
+            msg = f"capacity must be an integer >= 2, got {capacity!r}"
+            raise ConfigurationError(msg)
+        if channel_capacity is not None:
+            for override in channel_capacity.values():
+                if (
+                    not isinstance(override, int)  # pyright: ignore[reportUnnecessaryIsInstance]
+                    or isinstance(override, bool)
+                    or override < 2
+                ):
+                    msg = f"channel_capacity values must be integers >= 2, got {override!r}"
+                    raise ConfigurationError(msg)
+
         self.expiry = expiry
         self.group_expiry = group_expiry
         self.capacity = capacity
@@ -381,6 +401,7 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
             watchdog_interval=self.watchdog_interval,
             metrics=self._obs_metrics if __debug__ else None,
             log=self._obs_log if __debug__ else None,
+            lock=lock,
         )
 
     def _init_shm(
@@ -947,7 +968,12 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
     async def flush(self) -> None:
         """Reset the channel layer to blank state (§9.6).
 
-        Must be called in a quiescent state (no concurrent send/receive).
+        Concurrent send/receive is tolerated: the per-ring flush generation
+        fence makes an operation that races this reset retract itself instead
+        of publishing into, or freeing pages of, the wiped pool
+        (2026-09-04-flush-generation-fence). A raced send surfaces as a
+        transient ChannelFull; the residual window is a few instructions wide
+        (between an operation's last generation check and its final store).
         Does NOT touch Wakeup Registry (C-flush).
         """
         self._check_open("flush")

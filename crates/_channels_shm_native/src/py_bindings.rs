@@ -115,8 +115,16 @@ impl PyRing {
         }
     }
 
-    pub fn init(&self, region: &PyShmRegion, capacity: u32) {
+    pub fn init(&self, region: &PyShmRegion, capacity: u32) -> PyResult<()> {
+        if capacity < 2 {
+            return Err(PyValueError::new_err(
+                "ring capacity must be >= 2 (pos % capacity divides by zero at 0; a \
+                 single-slot ring cannot distinguish published from recycled in the \
+                 seq encoding)",
+            ));
+        }
         unsafe { self.inner.init(&region.inner, capacity) }
+        Ok(())
     }
 
     pub fn offset(&self) -> usize {
@@ -138,7 +146,15 @@ impl PyRing {
         expiry_ts: f64,
         pid: u32,
         start_time: u64,
-    ) -> bool {
+    ) -> PyResult<bool> {
+        // The in-shm name field is 128 bytes; the old path silently truncated
+        // longer names (message misrouting) — reject them instead.
+        if channel_name.len() > 128 {
+            return Err(PyValueError::new_err(format!(
+                "channel name too long: {} bytes > 128 (in-shm name field width)",
+                channel_name.len()
+            )));
+        }
         // Zero-copy: slice into the exporter's memory (memoryview from
         // msgpack.Packer.getbuffer() lands here without a Python-side bytes()
         // copy; §6.1 / L-19). try_enqueue copies the data into the shm ring
@@ -152,7 +168,7 @@ impl PyRing {
             Some(cells) => unsafe {
                 std::slice::from_raw_parts(cells.as_ptr().cast::<u8>(), cells.len())
             },
-            None => return false, // non-contiguous / incompatible — treat as failure
+            None => return Ok(false), // non-contiguous / incompatible — treat as failure
         };
         let owner = ring::OwnerIdentity { pid, start_time };
         let result = unsafe {
@@ -165,7 +181,7 @@ impl PyRing {
                 owner,
             )
         };
-        result == ring::EnqueueResult::Ok
+        Ok(result == ring::EnqueueResult::Ok)
     }
 
     pub fn try_dequeue<'py>(

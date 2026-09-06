@@ -163,3 +163,170 @@ pub unsafe fn group_member_remove(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::region::ShmRegion;
+    use std::ptr::NonNull;
+
+    struct Harness {
+        _buf: Vec<u64>,
+        region: ShmRegion,
+        grp_slot_off: usize,
+        members_off: u64,
+        max_members: u32,
+    }
+
+    /// Region layout: [fake group slot][members array]. The group slot is
+    /// zeroed (version=0, count=0, active=0); entries start inactive.
+    fn setup(max_members: u32) -> Harness {
+        let members_size = max_members as usize * layout::MEMBER_ENTRY_SIZE;
+        let total = layout::GRP_SLOT_SIZE + members_size;
+        let words = total.div_ceil(8);
+        let buf = vec![0u64; words];
+        let ptr = buf.as_ptr() as *mut u8;
+        let non_null = NonNull::new(ptr).unwrap();
+        // SAFETY: buf is 8-byte aligned and valid for `total` bytes.
+        let region = unsafe { ShmRegion::new(non_null, total) };
+        let grp_slot_off = 0usize;
+        let members_off = layout::GRP_SLOT_SIZE as u64;
+        // SAFETY: offsets are within bounds.
+        unsafe {
+            for j in 0..max_members as usize {
+                let entry_off = members_off as usize + j * layout::MEMBER_ENTRY_SIZE;
+                region.write_u8(entry_off + layout::MEMBER_ACTIVE, 0);
+                region.store_u64(entry_off + layout::MEMBER_JOIN_TIME, 0);
+            }
+        }
+        Harness {
+            _buf: buf,
+            region,
+            grp_slot_off,
+            members_off,
+            max_members,
+        }
+    }
+
+    #[test]
+    fn test_read_all_filters_inactive_expired_and_invalid_utf8() {
+        let h = setup(8);
+        let expiry = 50u32;
+        // SAFETY: caller holds no flock in a single-threaded test.
+        unsafe {
+            // Active, fresh member.
+            assert!(group_member_add(
+                &h.region,
+                h.grp_slot_off,
+                h.members_off,
+                b"ch.fresh",
+                100,
+                h.max_members,
+                expiry
+            ));
+            // Active but expired member (join 50 + expiry 50 < now 150).
+            assert!(group_member_add(
+                &h.region,
+                h.grp_slot_off,
+                h.members_off,
+                b"ch.stale",
+                50,
+                h.max_members,
+                expiry
+            ));
+            // Inactive entry with a valid name — must be skipped.
+            let entry1 = h.members_off as usize + layout::MEMBER_ENTRY_SIZE;
+            h.region
+                .copy_in(entry1 + layout::MEMBER_CHANNEL_NAME, b"ch.inactive\0");
+
+            // Active entry with invalid UTF-8 — must be skipped.
+            let entry2 = h.members_off as usize + 2 * layout::MEMBER_ENTRY_SIZE;
+            h.region
+                .copy_in(entry2 + layout::MEMBER_CHANNEL_NAME, &[0xFF, 0xFE, 0x00]);
+            h.region.write_u8(entry2 + layout::MEMBER_ACTIVE, 1);
+        }
+        let names = group_members_read_all(&h.region, h.members_off, h.max_members, 150, expiry);
+        assert_eq!(names, vec!["ch.fresh".to_owned()]);
+    }
+
+    #[test]
+    fn test_read_all_returns_all_fresh_members_in_order() {
+        let h = setup(8);
+        // SAFETY: single-threaded test.
+        unsafe {
+            for name in ["a.x", "b.x", "c.x"] {
+                assert!(group_member_add(
+                    &h.region,
+                    h.grp_slot_off,
+                    h.members_off,
+                    name.as_bytes(),
+                    100,
+                    h.max_members,
+                    50
+                ));
+            }
+        }
+        let names = group_members_read_all(&h.region, h.members_off, h.max_members, 120, 50);
+        assert_eq!(
+            names,
+            vec!["a.x".to_owned(), "b.x".to_owned(), "c.x".to_owned()]
+        );
+    }
+
+    #[test]
+    fn test_remove_last_member_deactivates_group() {
+        let h = setup(4);
+        // SAFETY: single-threaded test.
+        unsafe {
+            assert!(group_member_add(
+                &h.region,
+                h.grp_slot_off,
+                h.members_off,
+                b"only",
+                100,
+                h.max_members,
+                50
+            ));
+            assert_eq!(
+                h.region
+                    .read_u32(h.grp_slot_off + layout::GRP_SLOT_MEMBER_COUNT),
+                1
+            );
+            assert!(group_member_remove(
+                &h.region,
+                h.grp_slot_off,
+                h.members_off,
+                b"only",
+                h.max_members
+            ));
+            assert_eq!(
+                h.region
+                    .read_u32(h.grp_slot_off + layout::GRP_SLOT_MEMBER_COUNT),
+                0
+            );
+            // Last member removed → group slot goes inactive.
+            assert_eq!(
+                h.region.read_u8(h.grp_slot_off + layout::GRP_SLOT_ACTIVE),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn test_read_full_width_name_without_nul() {
+        // A name occupying all 128 bytes (no NUL) must read back whole —
+        // covers the `unwrap_or(128)` length fallback.
+        let h = setup(4);
+        let entry = h.members_off as usize;
+        let name: Vec<u8> = std::iter::repeat_n(b'x', 128).collect();
+        // SAFETY: entry is within bounds.
+        unsafe {
+            h.region.copy_in(entry + layout::MEMBER_CHANNEL_NAME, &name);
+            h.region.write_u8(entry + layout::MEMBER_ACTIVE, 1);
+            let (active, read, _join) = group_member_read(&h.region, h.members_off, 0);
+            assert!(active);
+            assert_eq!(read.len(), 128);
+            assert_eq!(read, name);
+        }
+    }
+}

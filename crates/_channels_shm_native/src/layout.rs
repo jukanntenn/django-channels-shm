@@ -4,7 +4,10 @@
 
 // ── Magic & version ──
 pub const MAGIC: u32 = 0x4348_5348; // "CHSH"
-pub const VERSION: u32 = 1;
+/// Layout version. Bumped to 2 when RING_GENERATION was added (flush fence,
+/// 2026-09-04-flush-generation-fence): ring headers grew 40 → 48 bytes, so a
+/// v1 region must be rebuilt, not reused. check_magic folds this in.
+pub const VERSION: u32 = 2;
 
 // ── Header (at offset 0) ──
 pub const HDR_MAGIC: usize = 0; // u32
@@ -79,7 +82,12 @@ pub const RING_CAPACITY: usize = 16; // u32
                                      // padding
 pub const RING_LAST_COMPACT_ENQ: usize = 24; // u64
 pub const RING_LAST_COMPACT_DEQ: usize = 32; // u64
-pub const RING_HEADER_SIZE: usize = 40; // total, 8-byte aligned
+/// Flush generation: bumped (release) by reset() before it tears down state.
+/// Enqueue/dequeue sample it around their critical sections so an operation
+/// that raced a flush retracts instead of publishing into the wiped pool
+/// (2026-09-04-flush-generation-fence).
+pub const RING_GENERATION: usize = 40; // u64
+pub const RING_HEADER_SIZE: usize = 48; // total, 8-byte aligned
 
 // ── Vyukov Ring Slot ──
 pub const SLOT_SEQ: usize = 0; // u64
@@ -215,7 +223,14 @@ pub fn read_stat_starttime(pid: u32) -> u64 {
 
 /// Determine if a process is dead. Two-layer check: kill(pid,0) + starttime comparison.
 pub fn pid_dead(pid: u32, start_time: u64) -> bool {
-    if pid == 0 {
+    // pid 0 is never dead, and a pid whose i32 interpretation is negative can
+    // never be a real Linux pid (pid_max <= 4194304) — in-shm the only such
+    // value is the SLOT_RECOVERING sentinel (u32::MAX). kill() would treat it
+    // as a process-group broadcast (which SUCCEEDS) and /proc/<pid> would be
+    // missing, so without this guard the sentinel gets "confirmed dead" and
+    // observers break recover_slot's CAS mutex by passing it as the expected
+    // value (deterministic overflow double-free).
+    if (pid as i32) <= 0 {
         return false;
     }
     // Layer 1: check process existence
@@ -318,6 +333,18 @@ mod tests {
     fn test_pid_dead_zero_pid() {
         // pid=0 should not be considered dead
         assert!(!pid_dead(0, 0));
+    }
+
+    #[test]
+    fn test_pid_dead_sentinel_and_negative_pids() {
+        // SLOT_RECOVERING (u32::MAX) and any pid whose i32 view is negative
+        // can never be real Linux pids. Treating the sentinel as dead let
+        // observers break recover_slot's CAS mutex by passing it as the
+        // expected value: kill(-1,0) broadcasts and "succeeds", and
+        // /proc/4294967295 is missing, so the old two-layer check returned
+        // true (conservative-dead).
+        assert!(!pid_dead(u32::MAX, 0));
+        assert!(!pid_dead(0x8000_0000, 12345));
     }
 
     #[test]

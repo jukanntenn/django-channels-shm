@@ -100,3 +100,17 @@ class TestChannelIndexFull:
         assert is_new
         with pytest.raises(RuntimeError, match="Channel index full"):
             _ = channel_mgr.get_or_create_ring("ch2", 10)
+
+
+class TestRingCapacityGuard:
+    """get_or_create_ring rejects capacity < 2 (0 panics the ring's modulo;
+    1 is not representable in the Vyukov seq encoding)."""
+
+    @pytest.mark.parametrize("bad_capacity", [0, 1])
+    async def test_rejects_capacity_below_two(
+        self, layer: SharedMemoryChannelLayer, bad_capacity: int
+    ) -> None:
+        channel_mgr = layer._channel_mgr
+        assert channel_mgr is not None
+        with pytest.raises(ValueError, match=">= 2"):
+            _ = channel_mgr.get_or_create_ring("test.bad_cap", bad_capacity)

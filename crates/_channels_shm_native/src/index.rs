@@ -374,6 +374,15 @@ mod tests {
         max_members_per_group: u32,
     }
 
+    impl TestHarness {
+        /// Channel index slot offset for slot `i`.
+        fn ch_slot_off(&self, i: usize) -> usize {
+            // SAFETY: the header offset was written by build_harness.
+            let ch_off = unsafe { self.region.load_u64(layout::HDR_CHANNEL_INDEX_OFF) } as usize;
+            ch_off + i * layout::CH_SLOT_SIZE
+        }
+    }
+
     /// Build a zeroed 8-byte-aligned region of `size` bytes.
     fn make_region(size: usize) -> (Vec<u64>, ShmRegion) {
         let words = size.div_ceil(8);
@@ -889,5 +898,173 @@ mod tests {
         }
         let (found, _, _, _, _) = group_index_lookup(&h.region, name, h.max_groups);
         assert!(!found, "should skip slot with odd version");
+    }
+
+    #[test]
+    fn test_channel_index_create_repairs_dead_slot() {
+        // A writer that crashed mid-create leaves an odd seqlock version.
+        // The next create lazily repairs the slot to a clean empty baseline
+        // and reuses it.
+        let h = build_harness(8, 8, 4);
+        let (slot0, _) = channel_index_create(&h.region, "first", 1, 10, false, h.max_channels);
+        assert_ne!(slot0, 0);
+
+        // Simulate a crashed writer: odd version.
+        // SAFETY: slot0 is a valid slot offset.
+        unsafe { h.region.store_u64(slot0 + layout::CH_SLOT_VERSION, 1) };
+
+        // Create reuses the repaired slot 0.
+        let (slot, existed) =
+            channel_index_create(&h.region, "second", 2, 20, true, h.max_channels);
+        assert_eq!(slot, slot0, "repaired dead slot must be reused");
+        assert!(!existed);
+        // The repaired baseline is clean (even version, fields from "second").
+        // SAFETY: slot0 is valid.
+        let v = unsafe { h.region.load_u64(slot0 + layout::CH_SLOT_VERSION) };
+        assert_eq!(v % 2, 0);
+        let (found, _, ring_off, _, non_local) =
+            channel_index_lookup(&h.region, "second", h.max_channels);
+        assert!(found);
+        assert_eq!(ring_off, 2);
+        assert!(non_local);
+    }
+
+    #[test]
+    fn test_group_index_create_repairs_dead_slot() {
+        let h = build_harness(8, 8, 4);
+        let (slot0, _) = group_index_create_or_find(
+            &h.region,
+            &h.slab,
+            "g1",
+            h.max_groups,
+            h.max_members_per_group,
+        );
+        assert_ne!(slot0, 0);
+        // SAFETY: slot0 is a valid group slot.
+        unsafe { h.region.store_u64(slot0 + layout::GRP_SLOT_VERSION, 1) };
+        // Create-or-find repairs the dead slot and reuses it for a new group.
+        let (slot, members) = group_index_create_or_find(
+            &h.region,
+            &h.slab,
+            "g2",
+            h.max_groups,
+            h.max_members_per_group,
+        );
+        assert_eq!(slot, slot0);
+        assert_ne!(members, 0);
+    }
+
+    #[test]
+    fn test_flush_resets_channel_slots_group_slots_and_pool() {
+        // flush() resets every channel slot (including its ring), every group
+        // slot, and the dynamic pool. Slots with name_len>0 but ring_offset=0
+        // (corrupt) must be tolerated (ring reset skipped, slot still cleared).
+        let h = build_harness(8, 8, 4);
+        let (slot, _) = channel_index_create(&h.region, "ch1", 0, 10, false, h.max_channels);
+        assert_ne!(slot, 0);
+        let (gslot, _) = group_index_create_or_find(
+            &h.region,
+            &h.slab,
+            "g1",
+            h.max_groups,
+            h.max_members_per_group,
+        );
+        assert_ne!(gslot, 0);
+
+        // A corrupt occupied slot with no ring must not panic flush.
+        // SAFETY: channel index slot 1 is within bounds.
+        unsafe {
+            h.region
+                .write_u16(h.ch_slot_off(1) + layout::CH_SLOT_NAME_LEN, 5);
+        }
+
+        // SAFETY: harness is valid; flush is a pure shm operation.
+        flush(&h.region, &h.slab, h.max_channels, h.max_groups);
+
+        // SAFETY: slots are within bounds.
+        unsafe {
+            assert_eq!(
+                h.region.read_u16(slot + layout::CH_SLOT_NAME_LEN),
+                0,
+                "channel slot must be emptied"
+            );
+            assert_eq!(
+                h.region.read_u16(gslot + layout::GRP_SLOT_NAME_LEN),
+                0,
+                "group slot must be emptied"
+            );
+            assert_eq!(
+                h.region
+                    .read_u16(h.ch_slot_off(1) + layout::CH_SLOT_NAME_LEN),
+                0,
+                "corrupt slot must be cleaned"
+            );
+        }
+        // Pool reset: a fresh allocation starts from the data-area beginning
+        // again (bump pointer zeroed).
+        // SAFETY: slab was reset by flush.
+        let off = unsafe { h.slab.alloc_cold(&h.region, 100) };
+        let metadata = layout::SIZE_CLASSES.len() * 16 + 8;
+        assert_eq!(off, h.slab.pool_offset as u64 + metadata as u64);
+    }
+
+    #[test]
+    fn test_compact_repairs_registered_ring_via_index() {
+        // index::compact iterates registered rings and repairs their stuck
+        // slots (two-pass); slots with no ring are skipped untouched.
+        let h = build_harness(8, 8, 4);
+        // Allocate a real ring from the slab and register it.
+        let cap: u32 = 2;
+        let ring_size = layout::RING_HEADER_SIZE + cap as usize * layout::SLOT_SIZE;
+        // SAFETY: pool has room for the ring (64 KiB).
+        let ring_off = unsafe { h.slab.alloc_cold(&h.region, ring_size) };
+        assert_ne!(ring_off, 0);
+        let (slot, _) =
+            channel_index_create(&h.region, "ch1", ring_off, cap, false, h.max_channels);
+        assert_ne!(slot, 0);
+        // SAFETY: ring_off came from the slab; region is large enough.
+        unsafe {
+            let ring = crate::ring::Ring::new(ring_off as usize);
+            ring.init(&h.region, cap);
+            // Inject an E1 residual: seq behind, ownerless, frontier at 2.
+            h.region
+                .store_u64(ring_off as usize + layout::RING_ENQUEUE_POS, 2);
+            let slot0 = ring_off as usize + layout::RING_HEADER_SIZE;
+            h.region.store_u64(slot0 + layout::SLOT_SEQ, 0);
+            h.region.write_u32(slot0 + layout::SLOT_OWNER_PID, 0);
+
+            compact(&h.region, &h.slab, h.max_channels, 0);
+            compact(&h.region, &h.slab, h.max_channels, 0);
+
+            assert_eq!(h.region.load_u64(slot0 + layout::SLOT_SEQ), 2);
+            // The repaired ring accepts ticket 2 again.
+            use crate::ring::EnqueueResult;
+            assert_eq!(
+                ring.try_enqueue(
+                    &h.region,
+                    &h.slab,
+                    b"ch1",
+                    b"m",
+                    f64::MAX,
+                    crate::ring::OwnerIdentity {
+                        pid: 1,
+                        start_time: 0
+                    }
+                ),
+                EnqueueResult::Ok
+            );
+        }
+        // Occupied slot without a ring: untouched by compact.
+        // SAFETY: slot 1 is within bounds.
+        unsafe {
+            h.region
+                .write_u16(h.ch_slot_off(1) + layout::CH_SLOT_NAME_LEN, 5);
+            compact(&h.region, &h.slab, h.max_channels, 0);
+            assert_eq!(
+                h.region
+                    .read_u16(h.ch_slot_off(1) + layout::CH_SLOT_NAME_LEN),
+                5
+            );
+        }
     }
 }

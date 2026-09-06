@@ -16,12 +16,14 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import override
 
+from channels_shm._native import compact as native_compact
 from channels_shm.channel.manager import ChannelManager, non_local_name
 from channels_shm.serializer import Message, unpack_message
 
 if TYPE_CHECKING:
     from channels_shm._native import ShmRegion, SlabAllocator
     from channels_shm._obs.metrics import MetricsRegistry
+    from channels_shm.shm.lock import FlushLock
     from channels_shm.shm.wakeup import WakeupManager
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,7 @@ class ReceivePump:
     _watchdog_armed: bool  # False until first watchdog tick (P-11)
     _metrics: MetricsRegistry | None  # only non-None under __debug__
     _log: Any  # structlog BoundLogger or None; only set under __debug__
+    _lock: FlushLock | None  # cold-path flock; enables watchdog compaction
 
     def __init__(
         self,
@@ -96,6 +99,7 @@ class ReceivePump:
         *,
         metrics: MetricsRegistry | None = None,
         log: Any = None,
+        lock: FlushLock | None = None,
     ) -> None:
         self.region = region
         self.slab = slab
@@ -105,6 +109,7 @@ class ReceivePump:
         self.expiry = expiry
         self.pid = pid
         self.start_time = start_time
+        self._lock = lock
 
         self._watched_channels = set()
         self._metrics = metrics
@@ -237,7 +242,7 @@ class ReceivePump:
         self.drain_rings()
 
     async def _watchdog_loop(self) -> None:
-        """Periodic watchdog: detect pump stalls and trigger drain.
+        """Periodic watchdog: crash-residual repair + stall detection.
 
         CAPACITY NOTE (P-06): this coroutine runs on the SAME event loop as the
         pump, so it cannot rescue a dead/hung loop — it only covers the narrow
@@ -248,8 +253,22 @@ class ReceivePump:
             raise RuntimeError("watchdog loop started without an interval")
         while True:
             await asyncio.sleep(self._watchdog_interval)
-            # P-11: skip the first tick and re-arm `last_drain_ts`, so a pump
-            # that is created long before its first receive doesn't look
+            # Crash-residual repair (§9.7 watchdog-triggered compact): finishes
+            # E1/D1 residual slots and repairs parked by a crashed recoverer.
+            # Two consecutive ticks form compact's two-pass confirmation; the
+            # old position-advancement gate is gone because a stalled ring
+            # advances nothing (Full no longer burns tickets) and the gate
+            # would starve exactly the rings that need repair.
+            if self._lock is not None:
+                with self._lock:
+                    native_compact(
+                        self.region,
+                        self.slab,
+                        self.channel_mgr.max_channels,
+                        self.start_time,
+                    )
+            # P-11: skip the first tick and re-arm `last_drain_ts`, so a
+            # pump that is created long before its first receive doesn't look
             # "stuck" (which would fire a spurious drain + noisy metric).
             if not self._watchdog_armed:
                 self._watchdog_armed = True

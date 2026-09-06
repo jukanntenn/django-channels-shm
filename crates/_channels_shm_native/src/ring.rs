@@ -1,6 +1,12 @@
 // Vyukov bounded MPMC ring buffer implementation.
 // Per-slot sequence number + owner tracking for crash recovery.
 
+/// Bound on the `seq > pos` spin in try_enqueue. Only a compact repair racing
+/// an in-flight producer can push a slot's seq past the producer's ticket;
+/// after this many yields the enqueue returns Full (zero side effects, no
+/// ticket held) instead of spinning forever while pyo3 holds the GIL.
+const SEQ_AHEAD_SPIN_BOUND: u32 = 64;
+
 use crate::layout;
 use crate::region::ShmRegion;
 use crate::slab::SlabAllocator;
@@ -43,16 +49,25 @@ impl Ring {
     /// Initialize a newly allocated ring buffer.
     /// Must be called under global flock.
     ///
+    /// # Capacity constraint
+    ///
+    /// `capacity` MUST be >= 2. A single-slot ring is not representable in
+    /// this seq encoding: `published-unconsumed` (seq = pos+1) and
+    /// `recycled-empty` (seq = pos+cap = pos+1) collide, so a second enqueue
+    /// would silently overwrite a live message with no Full signal.
+    ///
     /// # Safety
     /// - `region` must be valid.
     /// - The memory at `ring_offset` must be large enough for the ring.
     pub unsafe fn init(&self, region: &ShmRegion, capacity: u32) {
+        debug_assert!(capacity >= 2, "single-slot rings are not representable");
         // Write header
         region.store_u64(self.ring_offset + layout::RING_ENQUEUE_POS, 0);
         region.store_u64(self.ring_offset + layout::RING_DEQUEUE_POS, 0);
         region.write_u32(self.ring_offset + layout::RING_CAPACITY, capacity);
         region.store_u64(self.ring_offset + layout::RING_LAST_COMPACT_ENQ, 0);
         region.store_u64(self.ring_offset + layout::RING_LAST_COMPACT_DEQ, 0);
+        region.store_u64(self.ring_offset + layout::RING_GENERATION, 0);
 
         // Initialize each slot
         let slot_size = layout::SLOT_SIZE;
@@ -93,6 +108,13 @@ impl Ring {
 
     /// Enqueue a message into the ring.
     ///
+    /// Vyukov CAS-claim admission: a ticket is consumed only after the target
+    /// slot is verified EMPTY (`seq == pos`). Every `Full` return happens
+    /// before the claim, so `enqueue_pos` never advances on failure — a send
+    /// retried after a drain lands on the same ticket, and a crashed
+    /// producer's claimed-but-unpublished ticket is the only residual state
+    /// (compact's job).
+    ///
     /// # Safety
     /// - The ring must be initialized.
     /// - `region` must be valid.
@@ -107,14 +129,63 @@ impl Ring {
         owner: OwnerIdentity,
     ) -> EnqueueResult {
         let cap = self.capacity(region) as u64;
+        debug_assert!(cap >= 2, "single-slot rings are not representable");
         let inline_size = self.inline_size(region) as usize;
 
-        // Step 1: Fetch our ticket
-        let pos = region.fetch_add_u64(self.ring_offset + layout::RING_ENQUEUE_POS, 1);
-        let idx = (pos % cap) as usize;
-        let slot_off = self.slot_offset(idx);
+        // Flush fence: if reset() bumps the generation while this operation
+        // is in flight, the pool this payload is heading into has been wiped;
+        // retract (tombstone our own round) instead of publishing a stale
+        // message or a resurrected overflow pointer.
+        let gen0 = region.load_u64(self.ring_offset + layout::RING_GENERATION);
 
-        // Step 2: Owner tracking (紧贴 fetch_add)
+        // Step 1: verify-then-claim. A Full return here consumed no ticket.
+        let pos;
+        let slot_off;
+        let mut seq_ahead_spins: u32 = 0;
+        loop {
+            let p = region.load_u64(self.ring_offset + layout::RING_ENQUEUE_POS);
+            let so = self.slot_offset((p % cap) as usize);
+            let seq = region.load_u64(so + layout::SLOT_SEQ);
+            if seq == p {
+                // EMPTY for round p — take the ticket.
+                if region
+                    .cas_u64(self.ring_offset + layout::RING_ENQUEUE_POS, p, p + 1)
+                    .is_ok()
+                {
+                    pos = p;
+                    slot_off = so;
+                    break;
+                }
+                continue; // Lost to a concurrent producer — re-read.
+            }
+            if seq < p {
+                // Ticket p's slot still holds its previous round: the ring is
+                // full by ticket accounting, or the slot is a crash residual.
+                let owner_pid = region.read_u32(so + layout::SLOT_OWNER_PID);
+                if owner_pid != 0
+                    && owner_pid != layout::SLOT_RECOVERING
+                    && crate::layout::pid_dead(
+                        owner_pid,
+                        region.load_u64(so + layout::SLOT_OWNER_START_TIME),
+                    )
+                {
+                    self.recover_slot(region, slab, so, cap, owner_pid);
+                    continue;
+                }
+                return EnqueueResult::Full;
+            }
+            // seq > pos: a compact repair wrote a future ticket under an
+            // in-flight producer. Bounded spin, then Full (no side effects).
+            seq_ahead_spins += 1;
+            if seq_ahead_spins >= SEQ_AHEAD_SPIN_BOUND {
+                return EnqueueResult::Full;
+            }
+            std::thread::yield_now();
+        }
+
+        // Step 2: owner tracking — AFTER the claim, so the record describes a
+        // ticket this producer owns and never clobbers the previous round's
+        // owner (which recover_slot relies on).
         debug_assert!(
             owner.pid != layout::SLOT_RECOVERING,
             "pid collides with RECOVERING sentinel"
@@ -123,38 +194,35 @@ impl Ring {
         region.store_u64(slot_off + layout::SLOT_OWNER_TICKET, pos);
         region.store_u64(slot_off + layout::SLOT_OWNER_START_TIME, owner.start_time);
 
-        // Step 3: Spin until slot is EMPTY (seq == pos)
-        loop {
-            let seq = region.load_u64(slot_off + layout::SLOT_SEQ);
-            if seq == pos {
-                break; // EMPTY, slot ready
-            }
-            if seq < pos {
-                // Phase behind: ring full or crashed slot
-                let owner_pid = region.read_u32(slot_off + layout::SLOT_OWNER_PID);
-                // Self-PID optimization: if owner is current process, ring is truly full.
-                // Avoids pid_dead() syscall (~200ns) — the process is alive (we're executing).
-                if owner_pid == owner.pid {
+        // Step 3: overflow allocation BEFORE any payload write, so the SKIP
+        // tombstone below leaves the payload untouched.
+        let overflow_off = if msg_data.len() > inline_size {
+            let off = slab.alloc(region, msg_data.len());
+            if off == 0 {
+                // Slab exhausted. Unraced: recycle the claimed round (SKIP
+                // tombstone — the ring keeps working; zero new consumer code,
+                // seq = pos + cap falls into dequeue's existing skip branch).
+                // Raced by a flush: write NOTHING — the reset state is already
+                // the correct final state for an unpublished round, and a
+                // fresh round may have re-claimed this slot under the same
+                // ticket number (cross-generation aliasing), which any store
+                // here could clobber. Drop our owner record only; the CAS
+                // fails harmlessly if a fresh round already replaced it.
+                if region.load_u64(self.ring_offset + layout::RING_GENERATION) != gen0 {
+                    let _ = region.cas_u64(slot_off + layout::SLOT_OWNER_PID, owner.pid as u64, 0);
+                } else {
+                    let _ = region.cas_u64(slot_off + layout::SLOT_SEQ, pos, pos + cap);
                     region.write_u32(slot_off + layout::SLOT_OWNER_PID, 0);
                     region.store_u64(slot_off + layout::SLOT_OWNER_TICKET, 0);
-                    return EnqueueResult::Full;
                 }
-                let owner_st = region.load_u64(slot_off + layout::SLOT_OWNER_START_TIME);
-                if owner_pid != 0 && crate::layout::pid_dead(owner_pid, owner_st) {
-                    // Recover crashed slot (pass dead_owner_pid for CAS expected)
-                    self.recover_slot(region, slab, slot_off, cap, owner_pid);
-                    continue;
-                }
-                // Owner not set or not dead — either residual window or truly full
-                region.write_u32(slot_off + layout::SLOT_OWNER_PID, 0);
-                region.store_u64(slot_off + layout::SLOT_OWNER_TICKET, 0);
                 return EnqueueResult::Full;
             }
-            // seq > pos: slot occupied by previous round, spin
-            std::thread::yield_now();
-        }
+            off
+        } else {
+            0
+        };
 
-        // Step 4: Write message data
+        // Step 4: write message data
         // Write expiry_ts
         region.store_u64(slot_off + layout::SLOT_EXPIRY_TS, expiry_ts.to_bits());
 
@@ -167,32 +235,44 @@ impl Ring {
         );
 
         // Write message
-        if msg_data.len() <= inline_size {
+        region.write_u32(slot_off + layout::SLOT_MSG_LEN, msg_data.len() as u32);
+        if overflow_off == 0 {
             // Inline
-            region.write_u32(slot_off + layout::SLOT_MSG_LEN, msg_data.len() as u32);
             region.copy_in(slot_off + layout::SLOT_INLINE, msg_data);
             region.store_u64(slot_off + layout::SLOT_OVERFLOW_OFF, 0);
         } else {
-            // Overflow: allocate from slab
-            let overflow_off = slab.alloc(region, msg_data.len());
-            if overflow_off == 0 {
-                // Slab exhausted — cannot store message
-                // Treat as Full
-                region.write_u32(slot_off + layout::SLOT_OWNER_PID, 0);
-                region.store_u64(slot_off + layout::SLOT_OWNER_TICKET, 0);
-                return EnqueueResult::Full;
-            }
+            // Overflow page allocated in step 3
             region.copy_in(overflow_off as usize, msg_data);
-            region.write_u32(slot_off + layout::SLOT_MSG_LEN, msg_data.len() as u32);
             region.store_u64(slot_off + layout::SLOT_OVERFLOW_OFF, overflow_off);
         }
 
-        // Step 5: Publish (seq = pos + 1)
-        region.store_u64(slot_off + layout::SLOT_SEQ, pos + 1);
+        // Step 5: flush raced us mid-payload — retract WITHOUT writing. The
+        // round is unpublished, so the reset state is already the correct
+        // final state (the next round overwrites the payload before it
+        // publishes, and our never-published overflow pointer is inert).
+        // Writing seq/overflow here could clobber a FRESH round that
+        // re-claimed this slot under the same ticket number after the flush
+        // (cross-generation aliasing: worst case a zeroed live overflow
+        // pointer → garbage delivery). Drop our owner record only; the CAS
+        // fails harmlessly if a fresh round already replaced it.
+        if region.load_u64(self.ring_offset + layout::RING_GENERATION) != gen0 {
+            let _ = region.cas_u64(slot_off + layout::SLOT_OWNER_PID, owner.pid as u64, 0);
+            return EnqueueResult::Full;
+        }
 
-        // Step 6: Clear owner
+        // Step 6: Publish (seq = pos + 1), then clear owner.
+        region.store_u64(slot_off + layout::SLOT_SEQ, pos + 1);
         region.write_u32(slot_off + layout::SLOT_OWNER_PID, 0);
         region.store_u64(slot_off + layout::SLOT_OWNER_TICKET, 0);
+
+        // Step 7: the flush landed between the publish and the world seeing
+        // it — retract the published round. A pre-flush message must not
+        // surface post-flush; the CAS keeps a consumer that already claimed
+        // the round safe (they finish on the intact payload; the overflow
+        // claim-CAS keeps their free exactly-once).
+        if region.load_u64(self.ring_offset + layout::RING_GENERATION) != gen0 {
+            let _ = region.cas_u64(slot_off + layout::SLOT_SEQ, pos + 1, pos + cap);
+        }
 
         EnqueueResult::Ok
     }
@@ -217,22 +297,31 @@ impl Ring {
 
         loop {
             let pos = region.load_u64(dequeue_pos_off);
+            // Flush fence (see try_enqueue): a reset that lands between the
+            // claim below and the overflow free would push a page of the
+            // wiped pool into the fresh free list (double allocation).
+            let gen0 = region.load_u64(self.ring_offset + layout::RING_GENERATION);
             let idx = (pos % cap) as usize;
             let slot_off = self.slot_offset(idx);
 
             // Check slot state
             let seq = region.load_u64(slot_off + layout::SLOT_SEQ);
             if seq < pos + 1 {
-                // Phase behind: check for crashed owner
+                // Phase behind: check for a crashed owner. SLOT_RECOVERING is
+                // never treated as a dead owner: a parked repair is either
+                // still running (pid_dead hardening returns false for the
+                // sentinel) or its finisher is compact.
                 let owner_pid = region.read_u32(slot_off + layout::SLOT_OWNER_PID);
                 if owner_pid != 0 {
                     let owner_st = region.load_u64(slot_off + layout::SLOT_OWNER_START_TIME);
-                    if crate::layout::pid_dead(owner_pid, owner_st) {
+                    if owner_pid != layout::SLOT_RECOVERING
+                        && crate::layout::pid_dead(owner_pid, owner_st)
+                    {
                         self.recover_slot(region, slab, slot_off, cap, owner_pid);
                         continue;
                     }
                 }
-                return None; // Ring empty or slot being written
+                return None; // Ring empty or slot being written/repaired
             }
             if seq > pos + 1 {
                 // Slot already consumed by another consumer or stale
@@ -245,7 +334,16 @@ impl Ring {
             // seq == pos + 1: READY — try to claim via CAS
             match region.cas_u64(dequeue_pos_off, pos, pos + 1) {
                 Ok(_) => {
-                    // Claimed! Process the message.
+                    // Claimed! Process the message — unless a flush raced the
+                    // claim: recycle the slot WITHOUT freeing its overflow
+                    // page into the wiped-and-restarted pool, and let the
+                    // caller retry from the fresh dequeue_pos.
+                    if region.load_u64(self.ring_offset + layout::RING_GENERATION) != gen0 {
+                        let _ = region.cas_u64(slot_off + layout::SLOT_SEQ, pos + 1, pos + cap);
+                        region.write_u32(slot_off + layout::SLOT_OWNER_PID, 0);
+                        region.store_u64(slot_off + layout::SLOT_OWNER_TICKET, 0);
+                        return None;
+                    }
                 }
                 Err(_) => continue, // Another consumer claimed it
             }
@@ -258,12 +356,18 @@ impl Ring {
                 region.store_u64(slot_off + layout::SLOT_SEQ, pos + cap);
                 region.write_u32(slot_off + layout::SLOT_OWNER_PID, 0);
                 region.store_u64(slot_off + layout::SLOT_OWNER_TICKET, 0);
-                // Release overflow page if any
+                // Release overflow page if any. Claim-then-free: a crash
+                // after the CAS leaks the page (safe); the old free-then-zero
+                // order double-freed it into the slab free-list.
                 let overflow_off = region.load_u64(slot_off + layout::SLOT_OVERFLOW_OFF);
                 if overflow_off != 0 {
                     let msg_len = region.read_u32(slot_off + layout::SLOT_MSG_LEN) as usize;
-                    slab.free(region, overflow_off, msg_len);
-                    region.store_u64(slot_off + layout::SLOT_OVERFLOW_OFF, 0);
+                    if region
+                        .cas_u64(slot_off + layout::SLOT_OVERFLOW_OFF, overflow_off, 0)
+                        .is_ok()
+                    {
+                        slab.free(region, overflow_off, msg_len);
+                    }
                 }
                 continue; // Try next slot
             }
@@ -288,9 +392,15 @@ impl Ring {
             let msg_data = if overflow_off != 0 {
                 // Read from overflow page
                 let data = region.copy_out(overflow_off as usize, msg_len);
-                // Free overflow page (dequeue is the last reader)
-                slab.free(region, overflow_off, msg_len);
-                region.store_u64(slot_off + layout::SLOT_OVERFLOW_OFF, 0);
+                // Free overflow page (dequeue is the last reader).
+                // Claim-then-free: a crash after the CAS leaks the page
+                // (safe); free-then-zero double-freed on crash.
+                if region
+                    .cas_u64(slot_off + layout::SLOT_OVERFLOW_OFF, overflow_off, 0)
+                    .is_ok()
+                {
+                    slab.free(region, overflow_off, msg_len);
+                }
                 data
             } else {
                 // Read inline
@@ -331,6 +441,9 @@ impl Ring {
     ) {
         // CAS mutex: claim exclusive repair right.
         // CAS operates on the 8-byte slot [SLOT_OWNER_PID, +8); padding is 0 (layout invariant).
+        // Observers never pass SLOT_RECOVERING here (call-site guards plus
+        // pid_dead hardening), so this CAS cannot degrade into the no-op
+        // (RECOVERING → RECOVERING) that broke mutual exclusion.
         if region
             .cas_u64(
                 slot_off + layout::SLOT_OWNER_PID,
@@ -342,35 +455,84 @@ impl Ring {
             return; // Another process is already repairing this slot.
         }
 
-        // Release overflow page if any
+        // Repair to the dead owner's own next round.
+        let ticket = region.load_u64(slot_off + layout::SLOT_OWNER_TICKET);
+        let observed_seq = region.load_u64(slot_off + layout::SLOT_SEQ);
+        self.repair_slot_to(region, slab, slot_off, observed_seq, ticket + cap);
+    }
+
+    /// Idempotent stuck-slot repair: make the slot EMPTY for `target`.
+    ///
+    /// Safe to re-run (compact finishing a repair whose recoverer crashed)
+    /// and safe to race:
+    /// - the overflow release is CAS-claimed (exactly once; a crash after the
+    ///   claim leaks the page instead of double-freeing it),
+    /// - the seq store is a CAS from `observed_seq`, so it can never move a
+    ///   slot that a concurrent repair or producer already advanced,
+    /// - ownership is only cleared while the slot still shows RECOVERING.
+    ///
+    /// # Safety
+    /// - slot_off must be a valid slot offset.
+    unsafe fn repair_slot_to(
+        &self,
+        region: &ShmRegion,
+        slab: &SlabAllocator,
+        slot_off: usize,
+        observed_seq: u64,
+        target: u64,
+    ) {
+        // Release overflow page if any (claim-then-free, idempotent).
         let overflow_off = region.load_u64(slot_off + layout::SLOT_OVERFLOW_OFF);
         if overflow_off != 0 {
             let msg_len = region.read_u32(slot_off + layout::SLOT_MSG_LEN) as usize;
-            slab.free(region, overflow_off, msg_len);
-            region.store_u64(slot_off + layout::SLOT_OVERFLOW_OFF, 0);
+            if region
+                .cas_u64(slot_off + layout::SLOT_OVERFLOW_OFF, overflow_off, 0)
+                .is_ok()
+            {
+                slab.free(region, overflow_off, msg_len);
+            }
         }
-
-        // Fix seq = ticket + capacity
-        let ticket = region.load_u64(slot_off + layout::SLOT_OWNER_TICKET);
-        region.store_u64(slot_off + layout::SLOT_SEQ, ticket + cap);
-
-        // Clear owner (RECOVERING → 0)
-        region.write_u32(slot_off + layout::SLOT_OWNER_PID, 0);
+        // Fix seq = target (conditional: never move an already-advanced slot).
+        // Safe against the consumer for every representable capacity (>= 2):
+        // target is one full round ahead, so it can only satisfy the
+        // consumer's skip check (seq > deq+1), never its READY equality.
+        let _ = region.cas_u64(slot_off + layout::SLOT_SEQ, observed_seq, target);
+        // Clear owner (RECOVERING → 0; no-op when already ownerless).
+        let _ = region.cas_u64(
+            slot_off + layout::SLOT_OWNER_PID,
+            layout::SLOT_RECOVERING as u64,
+            0,
+        );
         region.store_u64(slot_off + layout::SLOT_OWNER_TICKET, 0);
     }
 
     /// Reset the ring for flush.
     /// Must be called under global flock.
     ///
+    /// Concurrent producers/consumers are tolerated: the generation is
+    /// bumped (release) BEFORE the teardown, and the hot paths sample it
+    /// around their critical sections — an operation that raced this reset
+    /// retracts instead of publishing into, or freeing pages of, the wiped
+    /// state (2026-09-04-flush-generation-fence). The residual window is the
+    /// few instructions between an operation's last generation check and its
+    /// final seq store / slab free.
+    ///
     /// # Safety
     ///
     /// - `region` must be a live, mapped shared-memory region containing this
     ///   initialized ring.
-    /// - The caller must hold the global flock so no producer/consumer can be
-    ///   accessing the ring concurrently; reset is destructive (drops all
-    ///   queued messages and frees slot state).
+    /// - The caller must hold the global flock (serializes reset against the
+    ///   other cold-path mutations; the fence handles the lock-free hot path).
     pub unsafe fn reset(&self, region: &ShmRegion) {
         let cap = self.capacity(region);
+        // Flush fence: bump the generation FIRST (release), so in-flight
+        // producers/consumers sampling the old value retract instead of
+        // publishing into — or freeing pages of — the state torn down below.
+        let gen = region.load_u64(self.ring_offset + layout::RING_GENERATION);
+        region.store_u64(
+            self.ring_offset + layout::RING_GENERATION,
+            gen.wrapping_add(1),
+        );
         region.store_u64(self.ring_offset + layout::RING_ENQUEUE_POS, 0);
         region.store_u64(self.ring_offset + layout::RING_DEQUEUE_POS, 0);
         region.store_u64(self.ring_offset + layout::RING_LAST_COMPACT_ENQ, 0);
@@ -397,8 +559,15 @@ impl Ring {
         }
     }
 
-    /// Compact the ring: fix residual-window stuck slots.
+    /// Compact the ring: fix residual stuck slots.
     /// Must be called under global flock.
+    ///
+    /// Two-pass confirmation: a slot is repaired only when it still looks
+    /// stuck on a SECOND pass. The passes are separated by the caller's
+    /// cadence (watchdog ticks or manual calls) — the old ≥2×cap
+    /// position-advancement gate is gone: since enqueue stopped burning
+    /// tickets on Full, a stalled ring's positions never advance, and the
+    /// gate would starve exactly the rings that need repair.
     ///
     /// # Safety
     /// - The ring must be initialized.
@@ -406,15 +575,7 @@ impl Ring {
         let cap = self.capacity(region) as u64;
         let enq = region.load_u64(self.ring_offset + layout::RING_ENQUEUE_POS);
         let deq = region.load_u64(self.ring_offset + layout::RING_DEQUEUE_POS);
-        let last_enq = region.load_u64(self.ring_offset + layout::RING_LAST_COMPACT_ENQ);
-        let last_deq = region.load_u64(self.ring_offset + layout::RING_LAST_COMPACT_DEQ);
-
-        // Condition (b): per-ring baseline advancement >= 2*capacity
-        let baseline_advancement = enq.max(deq).saturating_sub(last_enq.max(last_deq));
-        if baseline_advancement < 2 * cap {
-            // Not enough advancement, skip
-            return;
-        }
+        let max_pos = enq.max(deq);
 
         let slots_start = self.ring_offset + layout::RING_HEADER_SIZE;
         for i in 0..cap as usize {
@@ -427,7 +588,6 @@ impl Ring {
             // is one full round ahead whenever max_pos % cap <= i, which repairs
             // healthy slots to a future ticket and deadlocks the next enqueue in
             // the seq>pos spin branch (docs/BUGS.md).
-            let max_pos = enq.max(deq);
             let base = (max_pos / cap) * cap;
             let p = if max_pos % cap <= i as u64 {
                 base + i as u64
@@ -435,23 +595,29 @@ impl Ring {
                 base + cap + i as u64
             };
 
-            // Condition (a): seq behind the LAST completed round AND owner == 0.
-            // A dead slot's seq is at most max_pos - cap (the burnt ticket was
-            // issued at <= max_pos and its slot seq is one round behind), so
-            // comparing against max_pos - cap keeps healthy slots (seq == p,
-            // the next ticket >= max_pos) out of the repair path.
-            if seq <= max_pos.saturating_sub(cap) && owner_pid == 0 {
+            // Condition (a): the slot's round is fully behind the ring's
+            // frontier AND it has no live owner. With honest counters
+            // (enq - deq <= cap, an invariant of CAS-claim admission) a live
+            // message's seq = ticket+1 always exceeds max_pos - cap, so live
+            // messages cannot match. SLOT_RECOVERING counts as ownerless: a
+            // crashed recoverer erased its identity; the idempotent repair
+            // body is the only safe takeover.
+            let ownerless = owner_pid == 0 || owner_pid == layout::SLOT_RECOVERING;
+            // max_pos >= cap keeps the all-zero ring (fresh or just flushed)
+            // out of the predicate: its slot 0 has seq 0 <= 0 saturated, which
+            // would mark and "repair" it to the same value every cycle.
+            if max_pos >= cap && seq <= max_pos - cap && ownerless {
                 let compact_mark = region.read_u8(slot_off + layout::SLOT_COMPACT_MARK);
 
                 if compact_mark == 1 {
-                    // Condition (c): confirmed across two compact cycles — reset
-                    let overflow_off = region.load_u64(slot_off + layout::SLOT_OVERFLOW_OFF);
-                    if overflow_off != 0 {
-                        let msg_len = region.read_u32(slot_off + layout::SLOT_MSG_LEN) as usize;
-                        slab.free(region, overflow_off, msg_len);
-                        region.store_u64(slot_off + layout::SLOT_OVERFLOW_OFF, 0);
-                    }
-                    region.store_u64(slot_off + layout::SLOT_SEQ, p);
+                    // Condition (c): confirmed across two compact passes — repair.
+                    let target = if owner_pid == layout::SLOT_RECOVERING {
+                        // Finish the interrupted repair at its own round.
+                        region.load_u64(slot_off + layout::SLOT_OWNER_TICKET) + cap
+                    } else {
+                        p
+                    };
+                    self.repair_slot_to(region, slab, slot_off, seq, target);
                     region.write_u8(slot_off + layout::SLOT_COMPACT_MARK, 0);
                 } else {
                     // First observation — mark
@@ -463,7 +629,7 @@ impl Ring {
             }
         }
 
-        // Update per-ring compact baseline
+        // Baseline bookkeeping (observability only — no gate reads it).
         region.store_u64(self.ring_offset + layout::RING_LAST_COMPACT_ENQ, enq);
         region.store_u64(self.ring_offset + layout::RING_LAST_COMPACT_DEQ, deq);
     }
@@ -860,16 +1026,14 @@ mod tests {
     fn test_ring_compact_repairs_to_next_ticket_not_ahead() {
         // Regression test for the compact p-formula bug (docs/BUGS.md):
         // p must be the NEXT ticket targeting the slot, not one full round ahead.
-        // Pure-API repro (no manual memory writes):
-        //   1. fill ring (tickets 0-3)
-        //   2. 4 more enqueues -> Full (burns tickets 4-7, dead slot forms)
-        //   3. drain
-        //   4. 8 more enqueues -> all burnt (8-15)   enq=16 deq=4
-        //   5. compact #1 (mark)
-        //   6. 8 more enqueues -> all burnt (16-23)  enq=24
-        //   7. compact #2 (repair)
-        //   assert slot0.seq == 24 (next ticket), NOT 28 (one round ahead).
-        // With the bug, seq is repaired to 28 and ticket 24 then hits the
+        // Repro (burn-free since CAS-claim: Full no longer advances
+        // enqueue_pos, so the stuck state is injected directly):
+        //   1. drive 16 enq+deq rounds -> enq=deq=16, seqs=[16,17,18,19]
+        //   2. inject the E1 residual on slot 0 (seq stuck behind, owner==0)
+        //   3. enqueue must return Full WITHOUT consuming ticket 16
+        //   4. compact #1 (mark) -> compact #2 (repair; no advancement gate)
+        //   assert slot0.seq == 16 (next ticket), NOT 20 (one round ahead).
+        // With the bug, seq is repaired to 20 and ticket 16 then hits the
         // seq>pos spin branch (permanent deadlock).
         let cap = 4u32;
         let (_buf, region, ring, slab) = setup_ring(cap, 512);
@@ -879,65 +1043,51 @@ mod tests {
         let owner = OwnerIdentity { pid, start_time };
 
         unsafe {
-            // 1. Fill ring
-            for _ in 0..4 {
+            // 1. Drive 16 healthy rounds: enq=deq=16.
+            for _ in 0..16 {
                 assert_eq!(
                     ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
                     EnqueueResult::Ok
                 );
-            }
-            // 2. Ring full -> every further enqueue burns a ticket (Full)
-            for _ in 0..4 {
-                assert_eq!(
-                    ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
-                    EnqueueResult::Full
-                );
-            }
-            // 3. Drain
-            for _ in 0..4 {
                 assert!(ring.try_dequeue(&region, &slab, f64::MAX, owner).is_some());
             }
-            // 4. Dead slots: all tickets 8-15 burnt -> enq=16, deq=4
-            for _ in 0..8 {
-                assert_eq!(
-                    ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
-                    EnqueueResult::Full
-                );
-            }
+
+            // 2. Inject the E1 residual window on slot 0: a claimed-but-
+            //    crashed round whose owner was never recorded (seq one round
+            //    behind the frontier, ownerless).
+            let slot0_off = ring.ring_offset + layout::RING_HEADER_SIZE;
+            region.store_u64(slot0_off + layout::SLOT_SEQ, 4);
+            region.write_u32(slot0_off + layout::SLOT_OWNER_PID, 0);
+            region.write_u8(slot0_off + layout::SLOT_COMPACT_MARK, 0);
+
+            // 3. Enqueue must NOT take ticket 16 (slot not EMPTY for it) —
+            //    and must not burn it either (enqueue_pos stays at 16).
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
+                EnqueueResult::Full
+            );
             assert_eq!(
                 region.load_u64(ring.ring_offset + layout::RING_ENQUEUE_POS),
                 16
             );
-            assert_eq!(
-                region.load_u64(ring.ring_offset + layout::RING_DEQUEUE_POS),
-                4
-            );
 
-            // 5. Compact #1: advancement 16 >= 2*cap=8 -> marks all slots
+            // 4. Compact #1 marks; compact #2 confirms and repairs. The old
+            //    >=2*cap advancement gate would starve here (positions are
+            //    stalled), so this also regression-tests its removal.
             ring.compact(&region, &slab, start_time);
-
-            // 6. More burnt tickets 16-23 -> enq=24
-            for _ in 0..8 {
-                assert_eq!(
-                    ring.try_enqueue(&region, &slab, b"ch", b"m", expiry, owner),
-                    EnqueueResult::Full
-                );
-            }
-
-            // 7. Compact #2: advancement 8 >= 8 -> repairs
+            assert_eq!(region.read_u8(slot0_off + layout::SLOT_COMPACT_MARK), 1);
             ring.compact(&region, &slab, start_time);
 
             // After repair, slot0.seq must equal the next ticket targeting
-            // slot 0 (24). The buggy formula ((24/4)+1)*4+0=28 is one round
-            // ahead and deadlocks ticket 24 in the seq>pos spin branch.
-            let slot0_off = ring.ring_offset + layout::RING_HEADER_SIZE;
+            // slot 0 (16). The buggy formula ((16/4)+1)*4+0=20 is one round
+            // ahead and deadlocks ticket 16 in the seq>pos spin branch.
             let seq = region.load_u64(slot0_off + layout::SLOT_SEQ);
             assert_eq!(
-                seq, 24,
-                "compact must repair slot to the next ticket (24), got {seq} (bug: one round ahead)"
+                seq, 16,
+                "compact must repair slot to the next ticket (16), got {seq} (bug: one round ahead)"
             );
 
-            // 8. And enqueue of ticket 24 must succeed (not spin on seq>pos).
+            // 5. And enqueue of ticket 16 must succeed (not spin on seq>pos).
             // Guarded by a timeout so a regression fails fast instead of hanging.
             use std::sync::mpsc;
             let (tx, rx) = mpsc::channel();
@@ -950,7 +1100,7 @@ mod tests {
                     assert_eq!(
                         result,
                         EnqueueResult::Ok,
-                        "ticket 24 must enqueue after repair"
+                        "ticket 16 must enqueue after repair"
                     );
                 }
                 Err(_) => {
@@ -1695,11 +1845,11 @@ mod tests {
 
     #[test]
     fn test_recover_cas_no_double_free() {
-        // cap=1 forces all recoverers to target slot 0. Construct a dead slot
-        // (owner=dead pid, seq behind, overflow_off=valid). Multiple threads
-        // recover simultaneously → all hit recover's CAS. Verify slab free-list
-        // has NO duplicate (the freed overflow offset appears at most once).
-        let (_buf, region, ring, slab) = setup_ring(1, 512);
+        // A single dead slot (owner=dead pid, seq behind, overflow_off=valid).
+        // Multiple threads recover it simultaneously → all hit recover's CAS.
+        // Verify the slab free-list has NO duplicate (the freed overflow
+        // offset appears at most once).
+        let (_buf, region, ring, slab) = setup_ring(2, 512);
         let slot_off = ring.ring_offset + layout::RING_HEADER_SIZE;
 
         unsafe {
@@ -1761,6 +1911,491 @@ mod tests {
                 seen.contains(&overflow),
                 "overflow page {overflow} should be in free-list after recovery"
             );
+        }
+    }
+
+    #[test]
+    fn test_ring_full_does_not_advance_enqueue_pos() {
+        // The core CAS-claim invariant: a Full return consumed no ticket.
+        // Under the old fetch_add protocol every Full burned a ticket, and
+        // cap burnt tickets killed the whole ring (head-of-line block on the
+        // consumer, permanent ChannelFull even after a drain).
+        let (_buf, region, ring, slab) = setup_ring(2, 512);
+        let owner = OwnerIdentity {
+            pid: 1,
+            start_time: 0,
+        };
+        unsafe {
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"a", f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"b", f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+            let enq_off = ring.ring_offset + layout::RING_ENQUEUE_POS;
+            for _ in 0..8 {
+                assert_eq!(
+                    ring.try_enqueue(&region, &slab, b"ch", b"x", f64::MAX, owner),
+                    EnqueueResult::Full
+                );
+                assert_eq!(region.load_u64(enq_off), 2, "Full must not burn a ticket");
+            }
+            // Drain → the very next send lands on ticket 2 and succeeds.
+            assert!(ring.try_dequeue(&region, &slab, f64::MAX, owner).is_some());
+            assert!(ring.try_dequeue(&region, &slab, f64::MAX, owner).is_some());
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"c", f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+            assert_eq!(region.load_u64(enq_off), 3);
+        }
+    }
+
+    #[test]
+    fn test_ring_enqueue_recovers_dead_owner_then_claims() {
+        // A crashed previous-round owner on the slot the next ticket targets:
+        // enqueue sees seq < pos with a dead owner, repairs the slot (seq
+        // jumps one full round), and claims the repaired ticket in the same
+        // call. Under the old code the enqueue's own owner write clobbered
+        // the dead owner before the check, making this path unreachable.
+        let (_buf, region, ring, slab) = setup_ring(2, 512);
+        let owner = OwnerIdentity {
+            pid: 1,
+            start_time: 0,
+        };
+        unsafe {
+            // Simulate: ticket 0 claimed by a process that crashed before
+            // publishing; ticket 1 already claimed elsewhere; enq = 2.
+            region.store_u64(ring.ring_offset + layout::RING_ENQUEUE_POS, 2);
+            let slot0 = ring.ring_offset + layout::RING_HEADER_SIZE;
+            region.write_u32(slot0 + layout::SLOT_OWNER_PID, 999999);
+            region.store_u64(slot0 + layout::SLOT_OWNER_TICKET, 0);
+
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m", f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+            assert_eq!(region.load_u64(slot0 + layout::SLOT_SEQ), 3); // published 2+1
+            assert_eq!(region.read_u32(slot0 + layout::SLOT_OWNER_PID), 0);
+        }
+    }
+
+    #[test]
+    fn test_ring_enqueue_live_owner_returns_full() {
+        // seq < pos with a LIVE owner (a consumer mid-copy of the previous
+        // round): no recovery, just Full — and no ticket consumed.
+        let (_buf, region, ring, slab) = setup_ring(2, 512);
+        let owner = OwnerIdentity {
+            pid: std::process::id(),
+            start_time: crate::layout::read_self_starttime(),
+        };
+        unsafe {
+            region.store_u64(ring.ring_offset + layout::RING_ENQUEUE_POS, 2);
+            let slot0 = ring.ring_offset + layout::RING_HEADER_SIZE;
+            region.store_u64(slot0 + layout::SLOT_SEQ, 0);
+            region.write_u32(slot0 + layout::SLOT_OWNER_PID, owner.pid);
+            region.store_u64(slot0 + layout::SLOT_OWNER_TICKET, 0);
+            region.store_u64(slot0 + layout::SLOT_OWNER_START_TIME, owner.start_time);
+
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m", f64::MAX, owner),
+                EnqueueResult::Full
+            );
+            assert_eq!(
+                region.load_u64(ring.ring_offset + layout::RING_ENQUEUE_POS),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn test_ring_recovering_sentinel_parks_not_recovers() {
+        // A slot parked in SLOT_RECOVERING (repair in progress) must NOT be
+        // "recovered": pid_dead(u32::MAX) used to return true (kill(-1,0)
+        // broadcast "succeeds" + /proc/4294967295 missing), which turned
+        // recover's CAS into a no-op (RECOVERING→RECOVERING) and admitted a
+        // second repairer (deterministic overflow double-free). Now: enqueue
+        // → Full, dequeue → None, and compact finishes the parked repair.
+        let (_buf, region, ring, slab) = setup_ring(2, 512);
+        let owner = OwnerIdentity {
+            pid: 1,
+            start_time: 0,
+        };
+        unsafe {
+            region.store_u64(ring.ring_offset + layout::RING_ENQUEUE_POS, 2);
+            let slot0 = ring.ring_offset + layout::RING_HEADER_SIZE;
+            region.store_u64(slot0 + layout::SLOT_SEQ, 0);
+            region.write_u32(slot0 + layout::SLOT_OWNER_PID, layout::SLOT_RECOVERING);
+            region.store_u64(slot0 + layout::SLOT_OWNER_TICKET, 0);
+
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m", f64::MAX, owner),
+                EnqueueResult::Full
+            );
+            assert!(ring.try_dequeue(&region, &slab, f64::MAX, owner).is_none());
+
+            // compact two-pass takes over the parked repair (idempotent body).
+            ring.compact(&region, &slab, 0);
+            assert_eq!(region.read_u8(slot0 + layout::SLOT_COMPACT_MARK), 1);
+            ring.compact(&region, &slab, 0);
+            assert_eq!(region.load_u64(slot0 + layout::SLOT_SEQ), 2); // ticket+cap
+            assert_eq!(region.read_u32(slot0 + layout::SLOT_OWNER_PID), 0);
+            // The ring is alive again: ticket 2 enqueues.
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m", f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+        }
+    }
+
+    #[test]
+    fn test_ring_compact_finishes_crashed_recoverer_exactly_once() {
+        // A recoverer that died mid-repair leaves owner=SLOT_RECOVERING.
+        // compact's two-pass takeover must release the overflow page EXACTLY
+        // once (claim-then-free; the old free-then-zero order double-freed on
+        // re-entry and could self-ring the free-list).
+        let (_buf, region, ring, slab) = setup_ring(2, 16);
+        unsafe {
+            let slot0 = ring.ring_offset + layout::RING_HEADER_SIZE;
+            let overflow = slab.alloc(&region, 100);
+            assert!(overflow != 0);
+            region.store_u64(ring.ring_offset + layout::RING_ENQUEUE_POS, 2);
+            region.store_u64(slot0 + layout::SLOT_SEQ, 0);
+            region.write_u32(slot0 + layout::SLOT_OWNER_PID, layout::SLOT_RECOVERING);
+            region.store_u64(slot0 + layout::SLOT_OWNER_TICKET, 0);
+            region.store_u64(slot0 + layout::SLOT_OVERFLOW_OFF, overflow);
+            region.write_u32(slot0 + layout::SLOT_MSG_LEN, 100);
+
+            // Two passes mark + confirm; two more passes must NOT re-repair.
+            ring.compact(&region, &slab, 0);
+            ring.compact(&region, &slab, 0);
+            ring.compact(&region, &slab, 0);
+            ring.compact(&region, &slab, 0);
+            assert_eq!(region.load_u64(slot0 + layout::SLOT_SEQ), 2);
+            assert_eq!(region.read_u32(slot0 + layout::SLOT_OWNER_PID), 0);
+
+            // Free-list: the page appears exactly once, no self-ring.
+            let free_head_off = slab.free_heads_offset_for_test();
+            let mut seen = std::collections::HashSet::new();
+            let mut cur = region.load_u64(free_head_off);
+            let mut count = 0;
+            while cur != 0 {
+                assert!(seen.insert(cur), "double-free: offset {cur} twice");
+                cur = region.load_u64(cur as usize);
+                count += 1;
+                assert!(count < 64, "free-list self-ring detected");
+            }
+            assert!(seen.contains(&overflow));
+            assert_eq!(region.load_u64(slot0 + layout::SLOT_OVERFLOW_OFF), 0);
+        }
+    }
+
+    #[test]
+    fn test_ring_compact_never_drops_live_messages() {
+        // Regression (compact misjudging live messages): burnt tickets used
+        // to inflate enqueue_pos past deq+cap, making compact's condition (a)
+        // match live unconsumed messages and delete them after two passes.
+        // With honest counters (Full never advances enqueue_pos) a live
+        // message's seq always exceeds max_pos - cap, so it cannot match.
+        let (_buf, region, ring, slab) = setup_ring(2, 512);
+        let owner = OwnerIdentity {
+            pid: 1,
+            start_time: 0,
+        };
+        unsafe {
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m1", f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m2", f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+            // The old pathology needed burnt tickets to advance the frontier
+            // past deq+cap; now they cannot move positions at all.
+            for _ in 0..10 {
+                assert_eq!(
+                    ring.try_enqueue(&region, &slab, b"ch", b"x", f64::MAX, owner),
+                    EnqueueResult::Full
+                );
+            }
+            ring.compact(&region, &slab, 0);
+            ring.compact(&region, &slab, 0);
+
+            let (ch, d) = ring.try_dequeue(&region, &slab, f64::MAX, owner).unwrap();
+            assert_eq!(
+                (ch.as_slice(), d.as_slice()),
+                (b"ch".as_slice(), b"m1".as_slice())
+            );
+            let (ch, d) = ring.try_dequeue(&region, &slab, f64::MAX, owner).unwrap();
+            assert_eq!(
+                (ch.as_slice(), d.as_slice()),
+                (b"ch".as_slice(), b"m2".as_slice())
+            );
+            assert!(ring.try_dequeue(&region, &slab, f64::MAX, owner).is_none());
+        }
+    }
+
+    #[test]
+    fn test_ring_enqueue_seq_ahead_returns_full_bounded() {
+        // seq > pos is only reachable via a compact repair racing an in-flight
+        // producer; the enqueue must give up as Full after a bounded spin —
+        // never spin forever while pyo3 holds the GIL (whole-process freeze).
+        let (_buf, region, ring, slab) = setup_ring(2, 512);
+        let owner = OwnerIdentity {
+            pid: 1,
+            start_time: 0,
+        };
+        unsafe {
+            let slot0 = ring.ring_offset + layout::RING_HEADER_SIZE;
+            region.store_u64(slot0 + layout::SLOT_SEQ, 1_000);
+
+            // Thread + timeout so an unbounded-spin regression fails fast.
+            use std::sync::mpsc;
+            let (tx, rx) = mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                let r = ring.try_enqueue(&region, &slab, b"ch", b"m", f64::MAX, owner);
+                let _ = tx.send(r);
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(r) => assert_eq!(r, EnqueueResult::Full),
+                Err(_) => panic!("enqueue spins forever on seq > pos"),
+            }
+            let _ = handle.join();
+        }
+    }
+
+    #[test]
+    fn test_ring_skip_tombstone_keeps_ring_alive() {
+        // Slab exhaustion must not leave a dead slot: the claimed round is
+        // recycled with a SKIP tombstone, the caller still sees Full, and
+        // later messages enqueue on subsequent tickets. Under the old code
+        // one exhaustion killed a cap=1 ring permanently and degraded larger
+        // rings by one slot per event.
+        let ring_size = layout::RING_HEADER_SIZE + 4 * layout::SLOT_SIZE;
+        // Metadata (12 classes x 16B + bump) + exactly ONE 512-class block.
+        let pool_size = layout::SIZE_CLASSES.len() * 16 + 8 + 512;
+        let total_size = layout::HDR_SIZE + ring_size + pool_size;
+        let (_buf, region) = make_region(total_size);
+        unsafe {
+            region.write_u32(layout::HDR_INLINE_SIZE, 16);
+            let slab = SlabAllocator::new(layout::HDR_SIZE + ring_size, pool_size);
+            slab.init(&region);
+            let ring = Ring::new(layout::HDR_SIZE);
+            ring.init(&region, 4);
+            let owner = OwnerIdentity {
+                pid: 1,
+                start_time: 0,
+            };
+
+            let big = vec![0xABu8; 100]; // > inline 16 → 512-class overflow
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", &big, f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+            // Pool exhausted → SKIP tombstone + Full; the ticket is spent on
+            // the tombstone (enqueue_pos advances by exactly 1).
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", &big, f64::MAX, owner),
+                EnqueueResult::Full
+            );
+            assert_eq!(
+                region.load_u64(ring.ring_offset + layout::RING_ENQUEUE_POS),
+                2
+            );
+
+            // The ring is NOT dead: an inline message takes the next ticket…
+            assert_eq!(
+                ring.try_enqueue(&region, &slab, b"ch", b"m", f64::MAX, owner),
+                EnqueueResult::Ok
+            );
+            // …and the consumer sees exactly the two live messages, in FIFO
+            // order, with the skipped round protocol-jumped (no garbage).
+            let (ch, d) = ring.try_dequeue(&region, &slab, f64::MAX, owner).unwrap();
+            assert_eq!(
+                (ch.as_slice(), d.as_slice()),
+                (b"ch".as_slice(), big.as_slice())
+            );
+            let (ch, d) = ring.try_dequeue(&region, &slab, f64::MAX, owner).unwrap();
+            assert_eq!(
+                (ch.as_slice(), d.as_slice()),
+                (b"ch".as_slice(), b"m".as_slice())
+            );
+            assert!(ring.try_dequeue(&region, &slab, f64::MAX, owner).is_none());
+        }
+    }
+
+    #[test]
+    fn test_ring_reset_bumps_generation() {
+        let (_buf, region, ring, _slab) = setup_ring(2, 512);
+        unsafe {
+            let gen_off = ring.ring_offset + layout::RING_GENERATION;
+            assert_eq!(region.load_u64(gen_off), 0);
+            ring.reset(&region);
+            assert_eq!(region.load_u64(gen_off), 1);
+            ring.reset(&region);
+            assert_eq!(region.load_u64(gen_off), 2);
+        }
+    }
+
+    #[test]
+    fn test_ring_flush_race_stress_no_wedge() {
+        // Producers + a reset storm: with the fence, raced operations retract
+        // instead of publishing into the wiped pool. The invariants asserted
+        // are the ones the fence guarantees outright — no hang (bounded
+        // spins), no crash, and full functionality after the storm.
+        let (_buf, region, ring, slab) = setup_ring(8, 512);
+        let (region_ptr, len) = region.ptr_and_len();
+        let region_ptr = region_ptr as usize;
+        let ring_offset = ring.ring_offset;
+        let pool_offset = slab.pool_offset;
+        let pool_size = slab.pool_size;
+
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let producer_done = Arc::new(AtomicBool::new(false));
+
+        let producer = {
+            let done = producer_done.clone();
+            std::thread::spawn(move || {
+                let non_null = std::ptr::NonNull::new(region_ptr as *mut u8).unwrap();
+                let region = unsafe { ShmRegion::new(non_null, len) };
+                let slab = SlabAllocator::new(pool_offset, pool_size);
+                let ring = Ring::new(ring_offset);
+                let owner = OwnerIdentity {
+                    pid: 1,
+                    start_time: 0,
+                };
+                let mut sent = 0;
+                while sent < 50 {
+                    if unsafe { ring.try_enqueue(&region, &slab, b"ch", b"m", f64::MAX, owner) }
+                        == EnqueueResult::Ok
+                    {
+                        sent += 1;
+                    }
+                }
+                done.store(true, Ordering::Release);
+            })
+        };
+        let storm = std::thread::spawn(move || {
+            let non_null = std::ptr::NonNull::new(region_ptr as *mut u8).unwrap();
+            let region = unsafe { ShmRegion::new(non_null, len) };
+            let ring = Ring::new(ring_offset);
+            for _ in 0..200 {
+                unsafe { ring.reset(&region) };
+                std::thread::sleep(std::time::Duration::from_micros(500));
+            }
+        });
+
+        // Consumer on this thread with a deadline: the fence's bounded spins
+        // must keep every call short.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let owner = OwnerIdentity {
+            pid: 1,
+            start_time: 0,
+        };
+        let mut received = 0;
+        while !producer_done.load(Ordering::Acquire) || received < 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "flush-race stress wedged"
+            );
+            if unsafe { ring.try_dequeue(&region, &slab, f64::MAX, owner) }.is_some() {
+                received += 1;
+            }
+        }
+        storm.join().unwrap();
+        producer.join().unwrap();
+        assert!(received >= 1);
+
+        // Fully functional after the storm.
+        assert_eq!(
+            unsafe { ring.try_enqueue(&region, &slab, b"ch", b"final", f64::MAX, owner) },
+            EnqueueResult::Ok
+        );
+        let (_ch, data) = unsafe { ring.try_dequeue(&region, &slab, f64::MAX, owner) }
+            .expect("roundtrip after storm");
+        assert_eq!(data, b"final");
+    }
+
+    #[test]
+    fn test_ring_flush_aliasing_fresh_round_intact() {
+        // Cross-generation ticket aliasing, the exact F1' shape: a producer
+        // parked mid-payload on a first-round ticket, a flush resetting the
+        // ring, then a FRESH round re-claiming the same slot under the same
+        // ticket number. The fence's unpublished-round retract must write
+        // NOTHING (owner-CAS only) — the old retract zeroed the fresh round's
+        // overflow pointer and tombstoned its seq, delivering inline garbage.
+        // Each cycle aliases by construction: post-reset ticket 0 targets the
+        // slot the parked producer still holds.
+        let cap = 2u32;
+        let inline = 16u32;
+        // Pool: metadata + two 2MiB blocks (the parked producer's payload)
+        // + slack for the fresh round's 512-class page.
+        let pool_size = layout::SIZE_CLASSES.len() * 16 + 8 + 2 * (2 << 20) + 64 * 1024;
+        let ring_size = layout::RING_HEADER_SIZE + cap as usize * layout::SLOT_SIZE;
+        let total = layout::HDR_SIZE + ring_size + pool_size;
+        let (_buf, region) = make_region(total);
+        unsafe { region.write_u32(layout::HDR_INLINE_SIZE, inline) };
+        let slab = SlabAllocator::new(layout::HDR_SIZE + ring_size, pool_size);
+        slab.init(&region);
+        let ring = Ring::new(layout::HDR_SIZE);
+        // SAFETY: region is large enough.
+        unsafe { ring.init(&region, cap) };
+        let owner = OwnerIdentity {
+            pid: 1,
+            start_time: 0,
+        };
+
+        let big = vec![0xABu8; 2 << 20]; // > inline → 2MiB overflow class
+        let fresh: Vec<u8> = (0..100u8).collect();
+
+        for cycle in 0..5 {
+            std::thread::scope(|scope| {
+                let (region_ptr, len) = region.ptr_and_len();
+                let region_ptr = region_ptr as usize;
+                let ring_offset = ring.ring_offset;
+                let pool_offset = slab.pool_offset;
+                let pool_size2 = slab.pool_size;
+                let big_slice: &[u8] = &big;
+                let handle = scope.spawn(move || {
+                    let non_null = std::ptr::NonNull::new(region_ptr as *mut u8).unwrap();
+                    // SAFETY: same backing buffer, in bounds.
+                    let region = unsafe { ShmRegion::new(non_null, len) };
+                    let slab = SlabAllocator::new(pool_offset, pool_size2);
+                    let ring = Ring::new(ring_offset);
+                    // SAFETY: ring is initialized.
+                    unsafe { ring.try_enqueue(&region, &slab, b"ch", big_slice, f64::MAX, owner) }
+                });
+
+                // Park the producer inside its ~2MiB payload copy, then flush
+                // and immediately run a fresh round on the SAME slot
+                // (post-reset ticket 0 == the parked producer's ticket 0).
+                std::thread::sleep(std::time::Duration::from_micros(50 + cycle * 25));
+                // SAFETY: ring is initialized; single flusher.
+                unsafe { ring.reset(&region) };
+                // SAFETY: ring is initialized.
+                let fresh_res =
+                    unsafe { ring.try_enqueue(&region, &slab, b"ch", &fresh, f64::MAX, owner) };
+                assert_eq!(fresh_res, EnqueueResult::Ok, "cycle {cycle}: fresh enqueue");
+
+                // Let the parked producer run its retract BEFORE the fresh
+                // round is consumed — the retract must not tombstone a
+                // published round: the fresh dequeue is REQUIRED to see it.
+                // (Byte equality is not asserted: the parked producer's own
+                // late payload stores can tear a re-claimed round — the
+                // documented instructions-wide residual, caught at the
+                // layer by the pump's unpack tolerance.)
+                let _ = handle.join();
+
+                let got = unsafe { ring.try_dequeue(&region, &slab, f64::MAX, owner) };
+                assert!(
+                    got.is_some(),
+                    "cycle {cycle}: fresh published round vanished — retract tombstoned it"
+                );
+            });
         }
     }
 }

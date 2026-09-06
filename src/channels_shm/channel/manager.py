@@ -104,7 +104,13 @@ class ChannelManager:
         """
         ring_key = non_local_name(channel)
         is_non_local = is_process_specific(channel)
-        cap = capacity or self.default_capacity
+        # Explicit None check (not `or`): capacity=0 must NOT silently fall
+        # back to the default — and capacity < 2 is not representable in the
+        # ring's seq encoding (see Ring.init).
+        cap = self.default_capacity if capacity is None else capacity
+        if cap < 2:
+            msg = f"Ring capacity must be >= 2, got {cap}"
+            raise ValueError(msg)
 
         # Try lookup first
         found, _slot_off, ring_off, _existing_cap, _non_local = channel_index_lookup(

@@ -12,6 +12,7 @@ pub mod ring;
 pub mod slab;
 
 use py_bindings::{PyRing, PyShmRegion, PySlabAllocator};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -154,12 +155,16 @@ fn shm_init(
     }
 }
 
-/// Check if the shm header magic is valid.
+/// Check if the shm header is compatible (magic AND layout version).
 #[pyfunction]
 fn check_magic(region: &PyShmRegion) -> bool {
-    // Acquire load pairs with shm_init's Release store of magic.
+    // Acquire loads pair with shm_init's Release stores. The version fold
+    // sends a region written by an older layout down the caller's rebuild
+    // path instead of silently misreading it (ring headers changed size in
+    // layout v2).
     let magic = unsafe { region.inner.load_u32(layout::HDR_MAGIC) };
-    magic == layout::MAGIC
+    let version = unsafe { region.inner.load_u32(layout::HDR_VERSION) };
+    magic == layout::MAGIC && version == layout::VERSION
 }
 
 /// Read the shm header version.
@@ -209,15 +214,23 @@ fn channel_index_create(
     capacity: u32,
     non_local: bool,
     max_channels: u32,
-) -> (usize, bool) {
-    index::channel_index_create(
+) -> PyResult<(usize, bool)> {
+    // CH_SLOT_NAME is 128 bytes; without this check copy_in writes past the
+    // field into the next index slot.
+    if name.len() > 128 {
+        return Err(PyValueError::new_err(format!(
+            "channel name too long: {} bytes > 128 (in-shm name field width)",
+            name.len()
+        )));
+    }
+    Ok(index::channel_index_create(
         &region.inner,
         name,
         ring_offset,
         capacity,
         non_local,
         max_channels,
-    )
+    ))
 }
 
 /// Lookup a group by name in the index.
@@ -238,14 +251,21 @@ fn group_index_create_or_find(
     slab: &PySlabAllocator,
     max_groups: u32,
     max_members_per_group: u32,
-) -> (usize, u64) {
-    index::group_index_create_or_find(
+) -> PyResult<(usize, u64)> {
+    // GRP_SLOT_NAME is 128 bytes; reject instead of corrupting the next slot.
+    if name.len() > 128 {
+        return Err(PyValueError::new_err(format!(
+            "group name too long: {} bytes > 128 (in-shm name field width)",
+            name.len()
+        )));
+    }
+    Ok(index::group_index_create_or_find(
         &region.inner,
         &slab.inner,
         name,
         max_groups,
         max_members_per_group,
-    )
+    ))
 }
 
 /// Register a process in the wakeup registry.
@@ -421,9 +441,17 @@ fn group_member_add(
     now: u64,
     max_members: u32,
     group_expiry: u32,
-) -> bool {
+) -> PyResult<bool> {
+    // MEMBER_CHANNEL_NAME is 128 bytes; a longer name would be silently
+    // truncated and the member could never be matched for delivery/discard.
+    if channel_name.len() > 128 {
+        return Err(PyValueError::new_err(format!(
+            "channel name too long: {} bytes > 128 (in-shm name field width)",
+            channel_name.len()
+        )));
+    }
     // SAFETY: caller (Python layer) holds the global flock.
-    unsafe {
+    Ok(unsafe {
         member::group_member_add(
             &region.inner,
             grp_slot_off,
@@ -433,7 +461,7 @@ fn group_member_add(
             max_members,
             group_expiry,
         )
-    }
+    })
 }
 
 /// Remove a member from a group.
@@ -617,7 +645,7 @@ mod tests {
         );
 
         assert!(check_magic(&py_region));
-        assert_eq!(read_version(&py_region), 1);
+        assert_eq!(read_version(&py_region), layout::VERSION);
     }
 
     #[test]
@@ -643,7 +671,7 @@ mod tests {
         assert!(!found);
 
         let (slot_off, existed) =
-            channel_index_create(&py_region, "test.ch", 0x1000, 16, false, 10);
+            channel_index_create(&py_region, "test.ch", 0x1000, 16, false, 10).unwrap();
         assert!(slot_off != 0);
         assert!(!existed);
 
@@ -677,7 +705,7 @@ mod tests {
         assert!(!found);
 
         let (slot_off, members_off) =
-            group_index_create_or_find(&py_region, "test.group", &slab, 5, 100);
+            group_index_create_or_find(&py_region, "test.group", &slab, 5, 100).unwrap();
         assert!(slot_off != 0);
         assert!(members_off != 0);
 
@@ -741,7 +769,7 @@ mod tests {
         }
 
         let (grp_slot_off, members_off) =
-            group_index_create_or_find(&py_region, "test.group", &slab, 5, 2);
+            group_index_create_or_find(&py_region, "test.group", &slab, 5, 2).unwrap();
         assert!(grp_slot_off != 0);
         assert!(members_off != 0);
 
@@ -753,7 +781,8 @@ mod tests {
             1000,
             2,
             86400,
-        );
+        )
+        .unwrap();
         assert!(ok);
 
         let (active, name, join_time) = group_member_read(&py_region, members_off, 0);
@@ -769,7 +798,8 @@ mod tests {
             2000,
             2,
             86400,
-        );
+        )
+        .unwrap();
         assert!(ok);
 
         let (_, _, join_time) = group_member_read(&py_region, members_off, 0);
@@ -806,7 +836,7 @@ mod tests {
         }
 
         let (grp_slot_off, members_off) =
-            group_index_create_or_find(&py_region, "test.group", &slab, 5, 2);
+            group_index_create_or_find(&py_region, "test.group", &slab, 5, 2).unwrap();
 
         group_member_add(
             &py_region,
@@ -816,7 +846,8 @@ mod tests {
             100,
             2,
             50,
-        );
+        )
+        .unwrap();
         group_member_add(
             &py_region,
             grp_slot_off,
@@ -825,7 +856,8 @@ mod tests {
             100,
             2,
             50,
-        );
+        )
+        .unwrap();
 
         let ok = group_member_add(
             &py_region,
@@ -835,7 +867,8 @@ mod tests {
             151,
             2,
             50,
-        );
+        )
+        .unwrap();
         assert!(ok);
     }
 
@@ -860,12 +893,13 @@ mod tests {
         }
 
         let (grp_slot_off, members_off) =
-            group_index_create_or_find(&py_region, "test.group", &slab, 5, 2);
+            group_index_create_or_find(&py_region, "test.group", &slab, 5, 2).unwrap();
 
-        group_member_add(&py_region, grp_slot_off, members_off, "ch1", 1000, 2, 86400);
-        group_member_add(&py_region, grp_slot_off, members_off, "ch2", 1000, 2, 86400);
+        group_member_add(&py_region, grp_slot_off, members_off, "ch1", 1000, 2, 86400).unwrap();
+        group_member_add(&py_region, grp_slot_off, members_off, "ch2", 1000, 2, 86400).unwrap();
 
-        let ok = group_member_add(&py_region, grp_slot_off, members_off, "ch3", 1000, 2, 86400);
+        let ok =
+            group_member_add(&py_region, grp_slot_off, members_off, "ch3", 1000, 2, 86400).unwrap();
         assert!(!ok);
     }
 
@@ -941,5 +975,117 @@ mod tests {
             assert!(module.getattr("SLOT_SIZE").is_ok());
             assert!(module.getattr("SIZE_CLASSES").is_ok());
         });
+    }
+
+    #[test]
+    fn test_bindings_reject_overlong_names() {
+        // The in-shm name fields are 128 bytes; the bindings must reject
+        // longer names instead of truncating (ring) or writing past the
+        // field into the next slot (channel/group index, member entries).
+        let total_size = 1024 * 1024;
+        let (_buf, region) = make_region(total_size);
+        let (ptr, len) = region.ptr_and_len();
+        let py_region = PyShmRegion::new(ptr as usize, len).unwrap();
+        let (ch_off, _, _, _, _, pool_off) = compute_offsets(4, 4, 4, 4);
+        let pool_size = total_size as u64 - pool_off;
+        let slab = PySlabAllocator::new(pool_off as usize, pool_size as usize);
+        py_region.store_u64(layout::HDR_CHANNEL_INDEX_OFF, ch_off);
+        let long_name = "x".repeat(129);
+
+        assert!(channel_index_create(&py_region, &long_name, 1, 10, false, 4).is_err());
+        assert!(group_index_create_or_find(&py_region, &long_name, &slab, 4, 4).is_err());
+        assert!(group_member_add(&py_region, 0, 0, &long_name, 0, 4, 60).is_err());
+        // 128 is still accepted by the guard (downstream length checks apply).
+        let ok_name = "y".repeat(128);
+        let res = channel_index_create(&py_region, &ok_name, 1, 10, false, 4);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_registry_lookup_socket_binding() {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
+            let total_size = 1024 * 1024;
+            let (_buf, region) = make_region(total_size);
+            let (ptr, len) = region.ptr_and_len();
+            let py_region = PyShmRegion::new(ptr as usize, len).unwrap();
+            let (_, _, _, reg_off, _, _) = compute_offsets(10, 5, 100, 4);
+            py_region.store_u64(layout::HDR_WAKEUP_REGISTRY_OFF, reg_off);
+            for i in 0..4 {
+                let slot_off = reg_off as usize + i * layout::REG_SLOT_SIZE;
+                py_region.write_u8(slot_off + layout::REG_VALID, 0);
+                py_region.store_u64(slot_off + layout::REG_VERSION, 0);
+            }
+
+            // Miss: nothing registered.
+            assert!(registry_lookup_socket(py, &py_region, "nobody", 4).is_none());
+
+            // Hit: registered prefix returns its socket path.
+            let slot_off = registry_register(&py_region, "abc", "/tmp/abc.sock", 1, 100, 4);
+            assert_ne!(slot_off, 0);
+            let path = registry_lookup_socket(py, &py_region, "abc", 4)
+                .expect("registered prefix must resolve");
+            assert_eq!(path.as_bytes(), b"/tmp/abc.sock");
+
+            // Dead entries are skipped.
+            registry_mark_dead(&py_region, slot_off);
+            assert!(registry_lookup_socket(py, &py_region, "abc", 4).is_none());
+        });
+    }
+
+    #[test]
+    fn test_group_members_read_all_binding() {
+        let total_size = 1024 * 1024;
+        let (_buf, region) = make_region(total_size);
+        let (ptr, len) = region.ptr_and_len();
+        let py_region = PyShmRegion::new(ptr as usize, len).unwrap();
+        let (_, grp_off, _, _, _, pool_off) = compute_offsets(10, 5, 2, 4);
+        let pool_size = total_size as u64 - pool_off;
+        let slab = PySlabAllocator::new(pool_off as usize, pool_size as usize);
+        py_region.store_u64(layout::HDR_GROUP_INDEX_OFF, grp_off);
+        for i in 0..5 {
+            let slot_off = grp_off as usize + i * layout::GRP_SLOT_SIZE;
+            py_region.write_u16(slot_off + layout::GRP_SLOT_NAME_LEN, 0);
+            py_region.write_u8(slot_off + layout::GRP_SLOT_ACTIVE, 0);
+            py_region.store_u64(slot_off + layout::GRP_SLOT_VERSION, 0);
+        }
+
+        let (grp_slot_off, members_off) =
+            group_index_create_or_find(&py_region, "g", &slab, 5, 2).unwrap();
+        assert_ne!(grp_slot_off, 0);
+        assert!(
+            group_member_add(&py_region, grp_slot_off, members_off, "m1", 100, 2, 86400).unwrap()
+        );
+        assert!(
+            group_member_add(&py_region, grp_slot_off, members_off, "m2", 100, 2, 86400).unwrap()
+        );
+
+        // Bulk read binding returns both active members.
+        let names = group_members_read_all(&py_region, members_off, 2, 110, 86400);
+        assert_eq!(names, vec!["m1".to_owned(), "m2".to_owned()]);
+
+        // Per-index read binding.
+        let (active, name, join) = group_member_read(&py_region, members_off, 0);
+        assert!(active);
+        assert_eq!(name, b"m1".to_vec());
+        assert_eq!(join, 100);
+
+        // Remove binding removes exactly the named member.
+        assert!(group_member_remove(
+            &py_region,
+            grp_slot_off,
+            members_off,
+            "m1",
+            2
+        ));
+        assert!(!group_member_remove(
+            &py_region,
+            grp_slot_off,
+            members_off,
+            "gone",
+            2
+        ));
+        let names = group_members_read_all(&py_region, members_off, 2, 110, 86400);
+        assert_eq!(names, vec!["m2".to_owned()]);
     }
 }

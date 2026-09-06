@@ -91,7 +91,9 @@ def test_read_self_starttime_returns_nonzero() -> None:
 def test_magic_and_version_exposed() -> None:
     """MAGIC and VERSION constants should be exposed and match the spec."""
     assert MAGIC == 0x4348_5348  # "CHSH"
-    assert VERSION == 1
+    # 2 since the flush-fence layout change (RING_GENERATION, ring header
+    # 40 → 48); v1 regions rebuild via the check_magic version fold.
+    assert VERSION == 2
 
 
 def test_layout_size_constants_exposed() -> None:
@@ -102,7 +104,8 @@ def test_layout_size_constants_exposed() -> None:
     than the V1 100-byte-field layout.
     """
     assert HDR_SIZE == 4096
-    assert RING_HEADER_SIZE == 40
+    # 48 since layout v2 (RING_GENERATION added for the flush fence).
+    assert RING_HEADER_SIZE == 48
     assert SLOT_SIZE == 704
     assert CH_SLOT_SIZE == 168
     assert GRP_SLOT_SIZE == 176
