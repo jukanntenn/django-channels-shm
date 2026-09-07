@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1.7
 # stage1: build the native wheel with maturin (abi3 → Python-version independent)
-FROM rust:1.85-bookworm AS builder
+# Keep the tag >= crates/_channels_shm_native Cargo.toml rust-version (cargo
+# refuses to build with an older toolchain); pinning to the exact MSRV also
+# makes this the one CI job that verifies the declared MSRV actually compiles.
+FROM rust:1.86-bookworm AS builder
 WORKDIR /build
 # Install maturin via pip (rust image needs python3-pip first)
 RUN apt-get update -qq && apt-get install -y -qq python3-pip && rm -rf /var/lib/apt/lists/*

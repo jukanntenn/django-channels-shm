@@ -826,6 +826,22 @@
         ],
         "./examples/chat/chat/consumers.py": [
             {
+                "code": "reportUnannotatedClassAttribute",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 17,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnannotatedClassAttribute",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
                 "code": "reportImplicitOverride",
                 "range": {
                     "startColumn": 14,
@@ -950,6 +966,14 @@
                 "range": {
                     "startColumn": 40,
                     "endColumn": 60,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnknownArgumentType",
+                "range": {
+                    "startColumn": 64,
+                    "endColumn": 68,
                     "lineCount": 1
                 }
             },
@@ -1586,6 +1610,232 @@
                 "range": {
                     "startColumn": 4,
                     "endColumn": 64,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./scripts/agentlib.py": [
+            {
+                "code": "reportUnknownVariableType",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 7,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 10,
+                    "endColumn": 29,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnknownMemberType",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 14,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnknownMemberType",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 20,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnusedCallResult",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 49,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnusedCallResult",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 45,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnknownArgumentType",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnknownArgumentType",
+                "range": {
+                    "startColumn": 41,
+                    "endColumn": 44,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./scripts/check_agent_instructions.py": [
+            {
+                "code": "reportImplicitRelativeImport",
+                "range": {
+                    "startColumn": 5,
+                    "endColumn": 13,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 21,
+                    "endColumn": 33,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./scripts/sync_agent_instructions.py": [
+            {
+                "code": "reportImplicitRelativeImport",
+                "range": {
+                    "startColumn": 5,
+                    "endColumn": 13,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./scripts/verify_dcs_rfc_format.py": [
+            {
+                "code": "reportImplicitRelativeImport",
+                "range": {
+                    "startColumn": 5,
+                    "endColumn": 11,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./scripts/verify_doc_budgets.py": [
+            {
+                "code": "reportImplicitRelativeImport",
+                "range": {
+                    "startColumn": 5,
+                    "endColumn": 11,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAny",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 11,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportImplicitStringConcatenation",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 118,
+                    "lineCount": 2
+                }
+            }
+        ],
+        "./scripts/verify_doc_pairs.py": [
+            {
+                "code": "reportImplicitRelativeImport",
+                "range": {
+                    "startColumn": 5,
+                    "endColumn": 11,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAny",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 8,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAny",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 29,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAny",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 12,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAny",
+                "range": {
+                    "startColumn": 31,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAny",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAny",
+                "range": {
+                    "startColumn": 34,
+                    "endColumn": 42,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./scripts/verify_md_current.py": [
+            {
+                "code": "reportImplicitRelativeImport",
+                "range": {
+                    "startColumn": 5,
+                    "endColumn": 11,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./scripts/verify_md_links.py": [
+            {
+                "code": "reportImplicitRelativeImport",
+                "range": {
+                    "startColumn": 5,
+                    "endColumn": 11,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./scripts/verify_md_wrap.py": [
+            {
+                "code": "reportImplicitRelativeImport",
+                "range": {
+                    "startColumn": 5,
+                    "endColumn": 11,
                     "lineCount": 1
                 }
             }
