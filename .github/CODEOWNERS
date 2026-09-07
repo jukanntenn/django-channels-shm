@@ -1,0 +1,13 @@
+# CODEOWNERS — review routing
+# Solo-maintained today: every path routes to @jukanntenn.
+# As owners join, split per-subtree lines from this map:
+#   /crates/             Rust native module
+#   /src/channels_shm/   Python package
+#   /examples/chat/      standalone demo app
+#   /docs/ + root *.md   documentation & community files
+#
+# ABI note: /crates/_channels_shm_native/src/layout.rs defines the
+# shared-memory layout (ABI-critical, see AGENTS.md "Ask first").
+# Keep it under maintainer ownership even if /crates/ gains owners.
+
+*  @jukanntenn

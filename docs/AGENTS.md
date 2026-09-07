@@ -11,6 +11,7 @@ This file defines where documentation lives and the writing rules every gate enf
 | Subtree `AGENTS.md` (`crates/_channels_shm_native/`, `examples/chat/`, this file) | Orders specific to that subtree; never repeat the root |
 | `PRINCIPLES.md` + `.zh.md` | Behavioral constraints for the agent — the live home of the coding principles |
 | `docs/` | Operation guides (development, releasing, benchmarking) |
+| `CONTRIBUTING.md` + `.github/{CODE_OF_CONDUCT,SECURITY,SUPPORT}.md` pairs | Community-facing contribution & policy docs (wrap gate covers `CONTRIBUTING` only; canonical texts stay as shipped) |
 | `.agents/dcs-rfcs/` | This project's RFCs — proposals and decision records ([README](../.agents/dcs-rfcs/README.md)) |
 | `CHANGELOG.md` | Ledger — narrates history by design; exempt from prose gates |
 | `.agents/skills/` | Agent workflows (byte-mirrored to `.claude/skills/` by `scripts/sync_agent_instructions.py`) |

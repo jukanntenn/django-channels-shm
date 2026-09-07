@@ -39,7 +39,7 @@ CI's lint job runs exactly `prek validate-config` + `prek run --all-files` — t
 
 ## DCS-RFCs
 
-Every non-trivial change adds or updates at least one DCS-RFC in the same change-set ([`.agents/dcs-rfcs/README.md`](.agents/dcs-rfcs/README.md)) — grep the tree for the topic first; only mechanical/local edits are exempt. The `writing-rfcs` skill owns the workflow.
+Every non-trivial change adds or updates a DCS-RFC in the same change-set ([`.agents/dcs-rfcs/README.md`](.agents/dcs-rfcs/README.md)); grep first — only mechanical/local edits are exempt. The `writing-rfcs` skill owns the workflow.
 
 ## Commands (Python)
 
@@ -71,6 +71,7 @@ Every non-trivial change adds or updates at least one DCS-RFC in the same change
   - Run `uv lock` and commit `uv.lock` after dependency changes (root and `examples/chat`).
   - Rebuild native with `uvx maturin develop --skip-install` after changing Rust.
   - Update `__all__` in `src/channels_shm/__init__.py` when the public API changes.
+  - File programmatic bug reports following `.github/ISSUE_TEMPLATE/bug.yml`.
   - Add formatter/linter/consistency hooks ONLY to the prek configs — never to CI workflows or AI tool hooks.
 
 ⚠️ **Ask first**

@@ -1,4 +1,4 @@
-"""Performance benchmark suites for channels-shm.
+"""Performance benchmark suites for django-channels-shm.
 
 Layout:
 - bench/py/        single-process pytest-benchmark suite (fast, release build)

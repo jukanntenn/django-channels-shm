@@ -1,6 +1,6 @@
 # e2e — Django/channels cross-worker tests
 
-These tests run inside Docker against a real Django + channels + channels-shm
+These tests run inside Docker against a real Django + channels + django-channels-shm
 stack with multiple ASGI workers, proving messages cross worker boundaries.
 
 ## Run locally (requires Docker)

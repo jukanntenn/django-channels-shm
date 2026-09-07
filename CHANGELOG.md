@@ -7,7 +7,16 @@ candidate, published as a pre-release).
 
 ## [Unreleased]
 
+### Added
+
+- **Community-friendly infrastructure.** Bilingual `CONTRIBUTING`, code of conduct (Contributor Covenant 2.1), security policy (private reporting first, IPC trust boundary), and support routing pairs; bug/feature YAML issue forms with a PR checklist and `CODEOWNERS`; README completed to the five-element community standard with audited facts refreshed (prefix limit, dependency claims, benchmark tables) and a bilingual `examples/chat` README with per-language screenshots. Discussions ↔ DCS-RFC bridge and gate extensions recorded in the owning DCS-RFC.
+
 ### Changed
+
+- **Distribution renamed to `django-channels-shm`.** The package name now
+  matches the repository, aligned before the first PyPI release; the import
+  name stays `channels_shm`, so the `CHANNEL_LAYERS` `BACKEND` string is
+  unchanged.
 
 - **prek is the single source of truth for all quality gates.** The flat
   config became a prek workspace: root `prek.toml` plus

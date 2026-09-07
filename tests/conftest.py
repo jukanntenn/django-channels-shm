@@ -1,4 +1,4 @@
-"""Shared fixtures for the channels-shm test suite.
+"""Shared fixtures for the django-channels-shm test suite.
 
 The layer config is defined once here (``LAYER_CONFIG``) so unit tests,
 cross-process tests and recovery tests don't drift apart on the magic numbers.

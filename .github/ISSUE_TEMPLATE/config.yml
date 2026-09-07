@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/jukanntenn/django-channels-shm/discussions
+    about: Usage, configuration, and tuning questions go to Discussions Q&A.
+  - name: Security
+    url: https://github.com/jukanntenn/django-channels-shm/security
+    about: Please do not report security issues publicly — use private vulnerability reporting.

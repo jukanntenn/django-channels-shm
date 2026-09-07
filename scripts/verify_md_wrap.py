@@ -24,6 +24,8 @@ PATTERNS = [
     "examples/chat/AGENTS.md",
     "PRINCIPLES.md",
     "PRINCIPLES.zh.md",
+    "CONTRIBUTING.md",
+    "CONTRIBUTING.zh.md",
     "docs/*.md",
     ".agents/dcs-rfcs/*.md",
     ".agents/dcs-rfcs/**/*.md",

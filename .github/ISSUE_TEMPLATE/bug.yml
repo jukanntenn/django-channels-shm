@@ -1,0 +1,103 @@
+name: Bug
+description: Record a failure of existing intended behavior.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Before you file, please
+        search the existing issues for the same failure — a matching report
+        may already be tracked.
+  - type: checkboxes
+    id: existing
+    attributes:
+      label: Existing issue
+      description: Please search before filing.
+      options:
+        - label: I have searched the existing issues for the same bug.
+          required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence stating the wrong result.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Exact steps, ideally on a clean project or examples/chat.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Actual and expected result
+      description: What happened, and what should have happened instead?
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.12"
+    validations:
+      required: true
+  - type: input
+    id: kernel
+    attributes:
+      label: Distribution / kernel
+      placeholder: "Debian 13, Linux 6.12"
+    validations:
+      required: true
+  - type: input
+    id: shm-space
+    attributes:
+      label: Free space in /dev/shm
+      placeholder: "df -h /dev/shm"
+    validations:
+      required: false
+  - type: input
+    id: workers
+    attributes:
+      label: Worker processes
+      description: How many ASGI workers share the region.
+      placeholder: "3 (uvicorn --workers 3)"
+    validations:
+      required: false
+  - type: textarea
+    id: config
+    attributes:
+      label: Layer configuration
+      description: The CHANNEL_LAYERS CONFIG you use (prefix, capacity, shm_size, …).
+      render: yaml
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Pasted as-is; no backticks needed.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What must be true for this bug to count as fixed?
+    validations:
+      required: false
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our Code of Conduct.
+      options:
+        - label: I agree to follow this project's Code of Conduct.
+          required: true

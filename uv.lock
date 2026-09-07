@@ -84,113 +84,6 @@ wheels = [
 ]
 
 [[package]]
-name = "channels-shm"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "asgiref" },
-    { name = "channels" },
-    { name = "msgpack" },
-    { name = "structlog" },
-    { name = "typing-extensions" },
-]
-
-[package.dev-dependencies]
-benchmark = [
-    { name = "channels-redis" },
-    { name = "nox" },
-    { name = "pytest-benchmark" },
-]
-dev = [
-    { name = "basedpyright" },
-    { name = "channels-redis" },
-    { name = "coverage", extra = ["toml"] },
-    { name = "hypothesis" },
-    { name = "nox" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-benchmark" },
-    { name = "pytest-cov" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "ty" },
-]
-linting = [
-    { name = "ruff" },
-]
-observability = [
-    { name = "coverage", extra = ["toml"] },
-    { name = "hypothesis" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-xdist" },
-]
-tests = [
-    { name = "coverage", extra = ["toml"] },
-    { name = "hypothesis" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-xdist" },
-]
-type-checking = [
-    { name = "basedpyright" },
-    { name = "ty" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "asgiref", specifier = ">=3.9" },
-    { name = "channels", specifier = ">=4.0" },
-    { name = "msgpack", specifier = ">=1.0" },
-    { name = "structlog", specifier = ">=25.0" },
-    { name = "typing-extensions", specifier = ">=4.0" },
-]
-
-[package.metadata.requires-dev]
-benchmark = [
-    { name = "channels-redis", specifier = ">=4.3.0" },
-    { name = "nox", specifier = ">=2024.0" },
-    { name = "pytest-benchmark", specifier = ">=4.0" },
-]
-dev = [
-    { name = "basedpyright", specifier = ">=1.0" },
-    { name = "channels-redis", specifier = ">=4.3.0" },
-    { name = "coverage", extras = ["toml"], specifier = ">=7.0" },
-    { name = "hypothesis", specifier = ">=6.0" },
-    { name = "nox", specifier = ">=2024.0" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "pytest-benchmark", specifier = ">=4.0" },
-    { name = "pytest-cov", specifier = ">=5.0" },
-    { name = "pytest-xdist", specifier = ">=3.5" },
-    { name = "ruff", specifier = ">=0.4" },
-    { name = "ty", specifier = ">=0.0.62" },
-]
-linting = [{ name = "ruff", specifier = ">=0.4" }]
-observability = [
-    { name = "coverage", extras = ["toml"], specifier = ">=7.0" },
-    { name = "hypothesis", specifier = ">=6.0" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "pytest-cov", specifier = ">=5.0" },
-    { name = "pytest-xdist", specifier = ">=3.5" },
-]
-tests = [
-    { name = "coverage", extras = ["toml"], specifier = ">=7.0" },
-    { name = "hypothesis", specifier = ">=6.0" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "pytest-cov", specifier = ">=5.0" },
-    { name = "pytest-xdist", specifier = ">=3.5" },
-]
-type-checking = [
-    { name = "basedpyright", specifier = ">=1.0" },
-    { name = "ty", specifier = ">=0.0.62" },
-]
-
-[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -353,6 +246,113 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/89/55/664f24ff81c9ea19cb7dfc851afeae1f3c2390c7aee01d4ded68b5c1580d/django-6.0.7.tar.gz", hash = "sha256:2998503fc083124fb58037084bfa00de323c7c743f05f1b4284e77bff0ab8890", size = 10921299, upload-time = "2026-07-07T13:51:26.485Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/ec/1ce5334b6a2c52ce619c23a0be8d366a57a0e080ebb2d88266e5c849157c/django-6.0.7-py3-none-any.whl", hash = "sha256:a037427c2288443a8c02a1b02295a31c239663aa682bc50b1976afb7cf6a769e", size = 8373344, upload-time = "2026-07-07T13:51:20.007Z" },
+]
+
+[[package]]
+name = "django-channels-shm"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "asgiref" },
+    { name = "channels" },
+    { name = "msgpack" },
+    { name = "structlog" },
+    { name = "typing-extensions" },
+]
+
+[package.dev-dependencies]
+benchmark = [
+    { name = "channels-redis" },
+    { name = "nox" },
+    { name = "pytest-benchmark" },
+]
+dev = [
+    { name = "basedpyright" },
+    { name = "channels-redis" },
+    { name = "coverage", extra = ["toml"] },
+    { name = "hypothesis" },
+    { name = "nox" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-benchmark" },
+    { name = "pytest-cov" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+linting = [
+    { name = "ruff" },
+]
+observability = [
+    { name = "coverage", extra = ["toml"] },
+    { name = "hypothesis" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-xdist" },
+]
+tests = [
+    { name = "coverage", extra = ["toml"] },
+    { name = "hypothesis" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-xdist" },
+]
+type-checking = [
+    { name = "basedpyright" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asgiref", specifier = ">=3.9" },
+    { name = "channels", specifier = ">=4.0" },
+    { name = "msgpack", specifier = ">=1.0" },
+    { name = "structlog", specifier = ">=25.0" },
+    { name = "typing-extensions", specifier = ">=4.0" },
+]
+
+[package.metadata.requires-dev]
+benchmark = [
+    { name = "channels-redis", specifier = ">=4.3.0" },
+    { name = "nox", specifier = ">=2024.0" },
+    { name = "pytest-benchmark", specifier = ">=4.0" },
+]
+dev = [
+    { name = "basedpyright", specifier = ">=1.0" },
+    { name = "channels-redis", specifier = ">=4.3.0" },
+    { name = "coverage", extras = ["toml"], specifier = ">=7.0" },
+    { name = "hypothesis", specifier = ">=6.0" },
+    { name = "nox", specifier = ">=2024.0" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "pytest-benchmark", specifier = ">=4.0" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "pytest-xdist", specifier = ">=3.5" },
+    { name = "ruff", specifier = ">=0.4" },
+    { name = "ty", specifier = ">=0.0.62" },
+]
+linting = [{ name = "ruff", specifier = ">=0.4" }]
+observability = [
+    { name = "coverage", extras = ["toml"], specifier = ">=7.0" },
+    { name = "hypothesis", specifier = ">=6.0" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "pytest-xdist", specifier = ">=3.5" },
+]
+tests = [
+    { name = "coverage", extras = ["toml"], specifier = ">=7.0" },
+    { name = "hypothesis", specifier = ">=6.0" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "pytest-xdist", specifier = ">=3.5" },
+]
+type-checking = [
+    { name = "basedpyright", specifier = ">=1.0" },
+    { name = "ty", specifier = ">=0.0.62" },
 ]
 
 [[package]]

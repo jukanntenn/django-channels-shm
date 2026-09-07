@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate that the channels-shm version in pyproject.toml is valid PEP 440.
+"""Validate that the django-channels-shm version in pyproject.toml is valid PEP 440.
 
 This guards the single source of truth: ``pyproject.toml [project].version``
 is what maturin stamps into every sdist/wheel, and release tags must match it

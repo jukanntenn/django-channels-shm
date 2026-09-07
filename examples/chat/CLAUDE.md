@@ -6,7 +6,7 @@
 
 ```bash
 cd examples/chat
-uv sync                                   # builds channels-shm from ../.. via maturin
+uv sync                                   # builds django-channels-shm from ../.. via maturin
 uv run uvicorn chat.asgi:application --workers 3 --port 8000
 uv run python manage.py demo_broadcast    # headless acceptance: must print PASSED
 ```
@@ -14,6 +14,6 @@ uv run python manage.py demo_broadcast    # headless acceptance: must print PASS
 ## Rules
 
 - `demo_broadcast` is the acceptance gate — it must PASS before any release tag ([releasing](../../docs/releasing.md)).
-- `uv sync` builds channels-shm from the working tree through maturin; after Rust changes, this is where the fresh native module gets exercised end-to-end.
+- `uv sync` builds django-channels-shm from the working tree through maturin; after Rust changes, this is where the fresh native module gets exercised end-to-end.
 - Dependency changes: `uv lock` here and commit this project's `uv.lock` with the change.
 - User-facing docs for the demo live in its `README.md` (exempt from the bilingual corpus — a standalone project's own docs).

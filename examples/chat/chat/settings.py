@@ -1,6 +1,6 @@
-"""Django settings for the channels-shm chat demo.
+"""Django settings for the django-channels-shm chat demo.
 
-Deliberately minimal: the whole point of channels-shm is that a multi-process
+Deliberately minimal: the whole point of django-channels-shm is that a multi-process
 ASGI deployment needs no broker at all — no Redis, no database, just the
 shared-memory layer. Hence `DATABASES = {}`.
 """

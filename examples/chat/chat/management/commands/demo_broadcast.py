@@ -5,7 +5,7 @@ Spawns N worker processes. Every worker creates its OWN SharedMemoryChannelLayer
 shared group; the parent then group_sends M messages and every worker must
 receive all of them. That fan-out across processes is exactly what this
 library exists for, so this command is also how a freshly built or freshly
-installed channels-shm is accepted before a release (works against a path
+installed django-channels-shm is accepted before a release (works against a path
 build and against a PyPI/TestPyPI install alike).
 
 Exit code is non-zero on any shortfall, so it can gate CI or scripts.

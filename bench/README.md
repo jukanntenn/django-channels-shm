@@ -1,6 +1,6 @@
 # Benchmarks
 
-Performance suites for channels-shm. The product story being measured: a
+Performance suites for django-channels-shm. The product story being measured: a
 single-machine multi-process channel layer that replaces the in-memory or
 Redis layers for Django Channels, with latency in the tens of microseconds.
 

@@ -1,6 +1,6 @@
 # AGENTS.md — the native crate
 
-`_channels_shm_native` is the Rust hot path of channels-shm: lock-free rings, slab, indexes, the shared-memory layout, and the pyo3 bindings. Built as an abi3 extension via maturin; the Python side consumes it through the `_native.pyi` stub.
+`_channels_shm_native` is the Rust hot path of django-channels-shm: lock-free rings, slab, indexes, the shared-memory layout, and the pyo3 bindings. Built as an abi3 extension via maturin; the Python side consumes it through the `_native.pyi` stub.
 
 ## Commands (run inside `crates/_channels_shm_native/`)
 

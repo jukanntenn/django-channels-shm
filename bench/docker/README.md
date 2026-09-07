@@ -1,4 +1,4 @@
-# 3-way benchmark harness (channels-shm vs channels_redis vs InMemory)
+# 3-way benchmark harness (django-channels-shm vs channels_redis vs InMemory)
 
 Runs all three channel layers in one Docker container pinned to
 **2 CPUs / 2 GB RAM** — the hardware constraint documented in
