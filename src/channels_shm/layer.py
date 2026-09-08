@@ -94,8 +94,15 @@ CHANNEL_SUFFIX_MAX = 54
 class SharedMemoryChannelLayer(BaseChannelLayer):
     """A channel layer backed by shared memory for single-machine multi-process use.
 
-    Uses lock-free Vyukov MPMC ring buffers for hot-path operations
-    and fcntl.flock for cold-path structural changes.
+    Messages travel between ASGI workers through an ``mmap(MAP_SHARED)``
+    region in ``/dev/shm``; the hot path (``send``, ``receive``, group
+    fan-out) runs in the Rust native extension. All processes that share the
+    same ``prefix`` attach to one region — there is no broker process.
+
+    Lock-free Vyukov MPMC ring buffers carry hot-path operations and
+    ``fcntl.flock`` guards cold-path structural changes. An instance is bound
+    to a single event loop on a single thread: use one instance per process
+    (typically via ``CHANNEL_LAYERS``) and see ``close`` for lifecycle.
     """
 
     extensions: ClassVar[list[str]] = ["groups", "flush"]
@@ -156,6 +163,46 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
         log_max_bytes: int = 10 * 1024 * 1024,
         log_backup_count: int = 5,
     ) -> None:
+        """Create a channel layer and attach to the shared-memory region.
+
+        The region is created on first use and reused by every process that
+        passes the same ``prefix``. All keyword-only; every parameter has a
+        default that suits small deployments (see the docs site's
+        Configuration page for tuning guidance).
+
+        Args:
+            expiry: Message lifetime in seconds; receivers skip expired
+                messages.
+            group_expiry: Group membership lease in seconds; a member must
+                re-add before it expires or it is swept.
+            capacity: Default per-channel ring capacity in messages. Must be
+                an integer >= 2.
+            channel_capacity: Mapping of ``{channel name regex: capacity}`` to
+                override ``capacity`` for matching channels. Values must be
+                integers >= 2.
+            prefix: Namespace for the shared region and wakeup sockets under
+                ``/dev/shm``. Processes that must talk to each other share one
+                prefix; different prefixes are isolated regions. Limited to 53
+                characters (the AF_UNIX socket-path limit).
+            shm_size: Max size of the shared region in bytes.
+            inline_size: Messages of at most this many bytes are stored inline
+                in the ring slot (no allocation, no copy).
+            max_channels: Index slots reserved for channels.
+            max_groups: Index slots reserved for groups.
+            max_processes: Process registry entries.
+            max_members_per_group: Group fan-out bound (members per group).
+            watchdog_interval: Seconds between dead-owner sweeps; ``None``
+                disables the watchdog.
+            obs_dir: Debug-build only: directory for structured logs and
+                metrics. Ignored under ``python -O``.
+            log_max_bytes: Debug-build only: per-file log rotation size.
+            log_backup_count: Debug-build only: number of rotated log files
+                kept.
+
+        Raises:
+            ConfigurationError: If ``prefix`` is too long, or ``capacity`` (or
+                a ``channel_capacity`` value) is not an integer >= 2.
+        """
         # BaseChannelLayer.__init__ is typed for the channels_redis/InMemory
         # surface and trips basedpyright's call-arg check here; the call is
         # valid at runtime (it only stores expiry/capacity).
@@ -656,7 +703,25 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
 
     @override
     async def send(self, channel: str, message: Message) -> None:
-        """Send a message to a channel."""
+        """Send a message to a channel.
+
+        Args:
+            channel: The channel name to send to.
+            message: A dict of the ASGI message (recursively JSON-serializable
+                values; integers must fit a signed 64-bit range).
+
+        Raises:
+            TypeError: If ``message`` is not a dict or ``channel`` is an
+                invalid channel name.
+            ValueError: If ``message`` contains the reserved key
+                ``__asgi_channel__``.
+            MessageTooLarge: If the serialized message exceeds the 1 MiB
+                transport limit.
+            ChannelFull: If the channel's ring stays full after a bounded
+                emergency-drain retry.
+            OverflowError: If the message contains integers outside the signed
+                64-bit range.
+        """
         self._check_open("send")
         region, channel_mgr, _group_mgr, slab, lock, _wakeup, _pump = self._resources()
 
@@ -758,7 +823,20 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
 
     @override
     async def receive(self, channel: str) -> Message:
-        """Receive a message from a channel (blocks until available)."""
+        """Receive a message from a channel (blocks until one is available).
+
+        Args:
+            channel: The channel name to receive from. A process-specific
+                channel (contains ``!``) must belong to this process.
+
+        Raises:
+            TypeError: If ``channel`` is an invalid channel name.
+            ValueError: If ``channel`` is process-specific but owned by
+                another process.
+            RuntimeError: If the layer is closed, or the method is called from
+                a different event-loop thread than the one the layer is bound
+                to.
+        """
         self._check_open("receive")
         _region, channel_mgr, _group_mgr, _slab, lock, _wakeup, pump = self._resources()
 
@@ -794,12 +872,23 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
 
     @override
     async def new_channel(self, prefix: str = "specific.") -> str:
-        """Create a new process-specific channel name.
+        """Create a new process-specific channel name owned by this process.
 
-        The name embeds this process's client_prefix as the owning-process
-        marker: "{prefix}.{client_prefix}!{suffix}". L-07: validate prefix —
-        it must not contain '!' or '?', or it would corrupt the ownership
-        marker (non_local_name slices at the first '!').
+        The name embeds this process's client prefix as the ownership marker:
+        ``{prefix}{client_prefix}!{suffix}``. A message sent to the returned
+        name routes to this process regardless of which worker the sender
+        runs in.
+
+        Args:
+            prefix: Prefix for the generated name. Must not contain ``!`` or
+                ``?`` (they would corrupt the ownership marker); a trailing
+                ``.`` is added if absent.
+
+        Returns:
+            A process-specific channel name owned by this process.
+
+        Raises:
+            ValueError: If ``prefix`` contains ``!`` or ``?``.
         """
         if prefix and ("!" in prefix or "?" in prefix):
             msg = (
@@ -818,7 +907,15 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
 
     @override
     async def group_add(self, group: str, channel: str) -> None:
-        """Add a channel to a group."""
+        """Add a channel to a group.
+
+        Args:
+            group: The group name to join.
+            channel: The channel to add as a member.
+
+        Raises:
+            TypeError: If ``group`` or ``channel`` is an invalid name.
+        """
         self._check_open("group_add")
         _region, _channel_mgr, group_mgr, _slab, lock, _wakeup, _pump = (
             self._resources()
@@ -837,7 +934,15 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
 
     @override
     async def group_discard(self, group: str, channel: str) -> None:
-        """Remove a channel from a group."""
+        """Remove a channel from a group.
+
+        Args:
+            group: The group name to leave.
+            channel: The channel to remove as a member.
+
+        Raises:
+            TypeError: If ``group`` or ``channel`` is an invalid name.
+        """
         self._check_open("group_discard")
         _region, _channel_mgr, group_mgr, _slab, lock, _wakeup, _pump = (
             self._resources()
@@ -851,12 +956,27 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
 
     @override
     async def group_send(self, group: str, message: Message) -> None:
-        """Send a message to all channels in a group.
+        """Send a message to every member channel of a group.
 
-        Never raises ChannelFull: a member whose ring is full is silently
-        skipped (§7.4). MAY raise RuntimeError on cold-path structural failures
-        (e.g. channel index full) and TypeError/MessageTooLarge/ValueError on
-        invalid input (L-21).
+        Never raises ``ChannelFull``: a member whose ring is full is silently
+        skipped, so one slow receiver never blocks the rest of the group.
+
+        Args:
+            group: The group name to fan out to.
+            message: A dict of the ASGI message (same constraints as
+                ``send``).
+
+        Raises:
+            TypeError: If ``message`` is not a dict or ``group`` is an invalid
+                group name.
+            ValueError: If ``message`` contains the reserved key
+                ``__asgi_channel__``.
+            MessageTooLarge: If the serialized message exceeds the 1 MiB
+                transport limit.
+            RuntimeError: On cold-path structural failures (for example, the
+                channel index being full).
+            OverflowError: If the message contains integers outside the signed
+                64-bit range.
         """
         self._check_open("group_send")
         region, channel_mgr, group_mgr, slab, lock, wakeup, _pump = self._resources()
@@ -966,15 +1086,13 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
 
     @override
     async def flush(self) -> None:
-        """Reset the channel layer to blank state (§9.6).
+        """Reset the channel layer to a blank state.
 
-        Concurrent send/receive is tolerated: the per-ring flush generation
-        fence makes an operation that races this reset retract itself instead
-        of publishing into, or freeing pages of, the wiped pool
-        (2026-09-04-flush-generation-fence). A raced send surfaces as a
-        transient ChannelFull; the residual window is a few instructions wide
-        (between an operation's last generation check and its final store).
-        Does NOT touch Wakeup Registry (C-flush).
+        Clears channels, groups, and messages in the shared region. Safe to
+        call while other workers are sending or receiving: the per-ring flush
+        generation fence makes a raced operation retract itself (a raced send
+        surfaces as a transient ``ChannelFull``). Does not touch the Wakeup
+        Registry.
         """
         self._check_open("flush")
         region, _channel_mgr, _group_mgr, slab, lock, _wakeup, _pump = self._resources()
@@ -1005,11 +1123,11 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
     # ── Lifecycle ────────────────────────────────────────────────
 
     async def compact(self) -> None:
-        """Non-destructive stuck slot repair (§9.7).
+        """Repair stuck slots without resetting the layer.
 
-        Unlike flush(), this does NOT reset slot fields. Iterates channel index
-        slots and runs Ring.compact on each (the Rust side also covers the
-        seqlock stale-odd repair that group slots need; B-5).
+        Non-destructive, unlike ``flush``: iterates the channel index slots
+        and runs ring compaction, including the seqlock stale-odd repair that
+        group slots need. Safe to run on a live layer.
         """
         self._check_open("compact")
         region, _channel_mgr, _group_mgr, slab, lock, _wakeup, _pump = self._resources()
@@ -1018,11 +1136,12 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
             native_compact(region.native, slab, self.max_channels, self.start_time)
 
     async def close(self) -> None:
-        """Close the channel layer and release process resources.
+        """Close the layer and release this process's resources.
 
-        Idempotent (E-04): a second call is a no-op. Exception-safe: state is
-        cleared in a `finally` so a mid-close error still drops all references
-        (and thus frees the underlying fds/mmaps via the wrappers' close).
+        Stops the receive pump, marks this process dead in the wakeup
+        registry, and closes the wakeup sockets and the shared-memory mapping.
+        Idempotent: a second call is a no-op, and a mid-close error still
+        releases all references.
         """
         if self._closed:
             return
@@ -1076,6 +1195,11 @@ class SharedMemoryChannelLayer(BaseChannelLayer):
                 self._obs_metrics = None
 
     def unlink_shm(self) -> None:
-        """Explicitly unlink (delete) the shared memory file."""
+        """Explicitly unlink (delete) the shared-memory backing file.
+
+        Removes the ``/dev/shm`` file for this layer's ``prefix``. Unlink only
+        after every process has closed the layer, or the region is re-created
+        on next use.
+        """
         if self._region is not None:
             self._region.unlink()

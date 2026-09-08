@@ -4,22 +4,31 @@ from __future__ import annotations
 
 
 class ChannelFull(Exception):
-    """Raised when a channel's capacity is exceeded on send()."""
+    """Raised when a channel's ring stays full on ``send``.
+
+    Raised only by ``send`` after a bounded emergency-drain retry;
+    ``group_send`` never raises it (full members are silently skipped).
+    """
 
 
 class MessageTooLarge(Exception):
-    """Raised when a message exceeds the 1MB limit after serialization."""
+    """Raised when a serialized message exceeds the 1 MiB transport limit."""
 
 
 class ConfigurationError(ValueError):
-    """Raised when the channel layer configuration is invalid."""
+    """Raised when the channel layer configuration is invalid.
+
+    A subclass of ``ValueError``. Raised by the constructor for invalid
+    configuration values, for example an over-long ``prefix`` or a ``capacity``
+    that is not an integer >= 2.
+    """
 
 
 class DeadProcessError(Exception):
-    """Raised when a wakeup sendto indicates the target process is dead.
+    """Raised when a wakeup send targets a process that is already gone.
 
-    Moved here from shm/wakeup.py (W-05): a general-purpose exception belongs
-    with the other layer exceptions, not in the mechanism-implementation module.
+    Attributes:
+        socket_path: The dead process's wakeup socket path.
     """
 
     socket_path: str
