@@ -7,6 +7,7 @@ This file defines where documentation lives and the writing rules every gate enf
 | Tier | Job |
 | ---- | --- |
 | `README.md` / `README.zh.md` | User-facing product docs |
+| `docs/site/` | User-facing documentation site (MkDocs sources, English-only) — the expanded home of user docs ([DCS-RFC 2026-09-08](https://github.com/jukanntenn/django-channels-shm/blob/main/.agents/dcs-rfcs/implemented/2026-09-08-user-docs-site-on-readthedocs.md)) |
 | Root `AGENTS.md` | Standing orders for every session, 1–3 lines per rule, linking its home |
 | Subtree `AGENTS.md` (`crates/_channels_shm_native/`, `examples/chat/`, this file) | Orders specific to that subtree; never repeat the root |
 | `PRINCIPLES.md` + `.zh.md` | Behavioral constraints for the agent — the live home of the coding principles |

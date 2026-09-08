@@ -1,0 +1,47 @@
+# django-channels-shm documentation site (MkDocs Material).
+# Build: uv sync --extra docs && uv run mkdocs build --strict
+# Publish: Read the Docs via .readthedocs.yaml (see DCS-RFC 2026-09-08-user-docs-site-on-readthedocs).
+
+site_name: django-channels-shm
+site_description: A shared-memory channel layer for Django Channels — Python API on a Rust (PyO3) core.
+site_url: https://django-channels-shm.readthedocs.io/
+repo_url: https://github.com/jukanntenn/django-channels-shm
+edit_uri: blob/main/docs/site/
+docs_dir: docs/site
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            members_order: source
+            show_signature_annotations: true
+            separate_signature: true
+            filters: ["!^_"]
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+nav:
+  - Overview: index.md
+  - Getting started:
+      - Installation: install.md
+      - Quickstart: quickstart.md
+  - Guides:
+      - Concepts: concepts.md
+      - Configuration: configuration.md
+  - API reference:
+      - SharedMemoryChannelLayer: reference/layer.md
+      - Exceptions: reference/exceptions.md

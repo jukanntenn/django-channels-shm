@@ -1,0 +1,25 @@
+# Read the Docs configuration for django-channels-shm.
+# Reference: https://docs.readthedocs.io/en/stable/config-file/v2.html
+# The build compiles the PyO3 native extension (maturin backend) inside the
+# RTD image so mkdocstrings can import the real package and render the API
+# reference from docstrings (cryptography-proven pattern; DCS-RFC
+# 2026-09-08-user-docs-site-on-readthedocs).
+
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.13"
+    rust: "1.86"
+
+mkdocs:
+  configuration: mkdocs.yml
+  fail_on_warning: true
+
+python:
+  install:
+    - method: pip
+      path: .
+      extra_requirements:
+        - docs

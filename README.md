@@ -3,6 +3,7 @@
 English | [中文](README.zh.md)
 
 [![CI](https://github.com/jukanntenn/django-channels-shm/actions/workflows/ci.yml/badge.svg)](https://github.com/jukanntenn/django-channels-shm/actions/workflows/ci.yml)
+[![Documentation Status](https://readthedocs.org/projects/django-channels-shm/badge/?version=latest)](https://django-channels-shm.readthedocs.io/en/latest/?badge=latest)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 
 A high-performance **shared-memory channel layer for Django Channels**, designed for single-machine multi-process deployments. Messages travel between ASGI workers through an `mmap(MAP_SHARED)` region in `/dev/shm` — no Redis, no TCP, no broker — while the hot path runs in a **Rust native extension (PyO3)**.
@@ -15,6 +16,10 @@ ASGI worker A ──send──► ┌──────────────�
                         │  eventfd / AF_UNIX wakeup     │
                         └───────────────────────────────┘
 ```
+
+## Documentation
+
+User documentation — installation, quickstart, concepts, configuration, and the auto-generated API reference — is published at [django-channels-shm.readthedocs.io](https://django-channels-shm.readthedocs.io/en/latest/); the sources live in `docs/site/`.
 
 ## Features
 

@@ -31,6 +31,16 @@ dependencies = [
     "structlog>=25.0",
 ]
 
+# Documentation site tooling (MkDocs Material + mkdocstrings). Installed by
+# Read the Docs via `pip install .[docs]` (.readthedocs.yaml) and locally via
+# `uv sync --extra docs`. Renders docs/site/ (DCS-RFC
+# 2026-09-08-user-docs-site-on-readthedocs).
+[project.optional-dependencies]
+docs = [
+    "mkdocs-material>=9.6",
+    "mkdocstrings[python]>=0.26",
+]
+
 [dependency-groups]
 tests = [
     "pytest>=8.0",

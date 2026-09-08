@@ -42,5 +42,8 @@ crates/**/*.info
 
 .zcode/plans/
 
+# ── Docs: local mkdocs build output (Read the Docs builds remotely) ──
+/site/
+
 # ── Harness: e2e docker build artifacts ──
 tests/e2e/.docker/

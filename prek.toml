@@ -79,6 +79,12 @@ hooks = [
   # hook runs, so a wider scan would see a stale tree. CI's
   # `prek run --all-files` owns the full-corpus truth).
   { id = "doc-check", name = "doc_sync (documentation gates)", entry = "uv run python scripts/doc_sync.py", language = "system", types = ["markdown"], require_serial = true, groups = ["lint"] },
+  # Docs site builds strictly (same gate as RTD's fail_on_warning in
+  # .readthedocs.yaml). `--extra docs` self-provisions mkdocs on first run,
+  # so the hook needs no pre-installed extra; mkdocstrings imports the live
+  # package, so a native build (`uv sync` / maturin develop) must exist —
+  # first-time setup covers it. site/ is gitignored build output.
+  { id = "docs-build", name = "mkdocs strict build (docs site)", entry = "uv run --extra docs mkdocs build --strict", language = "system", pass_filenames = false, require_serial = true, groups = ["lint"] },
   # Agent-instruction mirrors (scripts/agentlib.py): direction-free
   # HEAD-based detection; a single-sided edit self-heals and stages the
   # twin, a true conflict fails naming both sides.

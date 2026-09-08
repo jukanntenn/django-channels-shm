@@ -3,6 +3,7 @@
 [English](README.md) | 中文
 
 [![CI](https://github.com/jukanntenn/django-channels-shm/actions/workflows/ci.yml/badge.svg)](https://github.com/jukanntenn/django-channels-shm/actions/workflows/ci.yml)
+[![Documentation Status](https://readthedocs.org/projects/django-channels-shm/badge/?version=latest)](https://django-channels-shm.readthedocs.io/en/latest/?badge=latest)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 
 一个面向 **Django Channels** 的高性能 **共享内存信道层（channel layer）**，专为单机多进程部署设计。消息通过 `/dev/shm` 中的 `mmap(MAP_SHARED)` 区域在 ASGI worker 之间传递 —— 无需 Redis、无需 TCP、无需 broker —— 热路径运行在 **Rust 原生扩展（PyO3）** 中。
@@ -15,6 +16,10 @@ ASGI worker A ──send──► ┌──────────────�
                         │  eventfd / AF_UNIX wakeup     │
                         └───────────────────────────────┘
 ```
+
+## 文档
+
+用户文档（安装、快速开始、概念、配置与自动生成的 API 参考）发布在 [django-channels-shm.readthedocs.io](https://django-channels-shm.readthedocs.io/en/latest/)，源码位于 `docs/site/`。
 
 ## 特性
 
