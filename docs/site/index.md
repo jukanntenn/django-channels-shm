@@ -28,3 +28,6 @@ Read on:
 - [Concepts](concepts.md) — how channels, groups, and recovery work
 - [Configuration](configuration.md) — every setting and what it trades off
 - [API reference](reference/layer.md) — `SharedMemoryChannelLayer` and friends
+
+!!! tip "Versioned documentation"
+    `latest` tracks the `main` branch and rebuilds on every push. Release tags are published automatically as versioned documentation, and `stable` follows the newest tag — switch versions from the flyout menu.
